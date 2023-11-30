@@ -62,3 +62,7 @@ class HookedSparseAutoencoder(HookedRootModule):
         self.decoder_map.weight.grad -= W_dec_grad_proj
         # Bugfix(?) for ensuring W_dec retains unit norm, this was not there when I trained my original autoencoders.
         self.decoder_map.weight.data = W_dec_normed
+
+    def make_decoder_weights_unit_norm(self):
+        W_dec_normed = self.decoder_map.weight.data / self.decoder_map.weight.data.norm(dim=-1, keepdim=True)
+        self.decoder_map.weight.data = W_dec_normed

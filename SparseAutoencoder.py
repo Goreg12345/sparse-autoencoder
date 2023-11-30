@@ -1,28 +1,40 @@
-from typing import Any
+from typing import Any, Union, Optional, Callable, IO, Iterable, List
+
+from transformer_lens import HookedTransformer
+from typing_extensions import Self
 
 import pytorch_lightning as pl
 import torch
+from lightning_fabric.utilities.types import _PATH, _MAP_LOCATION_TYPE
+from pytorch_lightning.core.optimizer import LightningOptimizer
 from torch import nn, Tensor
+from torch.optim import Optimizer
 
 from DeadFeatureResampler import DeadFeatureResampler
 from HookedSparseAutoencoder import HookedSparseAutoencoder
 from metrics.L0Loss import L0Loss
 from metrics.dead_neurons import DeadNeurons
+from metrics.reconstruction_loss import ReconstructionLoss
+from metrics.ultra_low_density_neurons import UltraLowDensityNeurons
 
 
 class SparseAutoencoder(pl.LightningModule):
 
-    def __init__(self, sae: HookedSparseAutoencoder, l1_coefficient: float = 6e-3, reconstruction_loss_metric=None,
-                 dead_features_resampler: DeadFeatureResampler = None, *args, **kwargs):
+    def __init__(self, sae: HookedSparseAutoencoder, resampling_steps: List, n_resampling_watch_steps,
+                 l1_coefficient: float = 6e-3, reconstruction_loss_metric=None,
+                 dead_features_resampler: DeadFeatureResampler = None, lr=1e-3, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.sae = sae
         self.l1_coefficient = l1_coefficient
         self.reconstruction_loss_metric = reconstruction_loss_metric
         self.dead_neurons_metric = DeadNeurons(sae.d_hidden)
         self.l0_loss = L0Loss()
+        self.low_freq_metric = UltraLowDensityNeurons(sae.d_hidden)
+        self.lr = lr
 
         # this one will be used to track dead neurons for the neuron resampling method
-        self.resampling_steps = [25000, 50000, 75000, 100000, 150000, 200000, 250000, 300000]
+        self.resampling_steps = resampling_steps
+        self.n_resampling_watch_steps = n_resampling_watch_steps
         self.dead_features_resampler = dead_features_resampler
 
     def forward(self, X):
@@ -45,9 +57,15 @@ class SparseAutoencoder(pl.LightningModule):
             self.log("dead_neurons", self.dead_neurons_metric.compute())
             self.dead_neurons_metric.reset()
 
+        if batch_idx > 2000:  # wait until the model has been trained for a bit
+            self.low_freq_metric.update(feature_activations)
+            if batch_idx % 10000 == 0:
+                self.log("low_freq_neurons", self.low_freq_metric.compute())
+                self.low_freq_metric.reset()
+
         if self.dead_features_resampler:
             # if batch_idx between any of resampling steps - 1000 and resampling steps
-            if any([batch_idx in range(step - 3500, step) for step in self.resampling_steps]):
+            if any([batch_idx in range(step - self.n_resampling_watch_steps, step) for step in self.resampling_steps]):
                 self.dead_features_resampler.update(feature_activations)
             if batch_idx in self.resampling_steps:
                 w = self.dead_features_resampler.compute(*self.sae.get_weights(), self.trainer.optimizers[0])
@@ -91,9 +109,68 @@ class SparseAutoencoder(pl.LightningModule):
         return loss
 
     def configure_optimizers(self):
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e-3)
+        optimizer = torch.optim.Adam(self.parameters(), lr=self.lr)
         return optimizer
 
     def backward(self, loss: Tensor, *args: Any, **kwargs: Any) -> None:
         loss.backward(*args, **kwargs)
         self.sae.make_decoder_weights_and_grad_unit_norm()
+
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: Union[Optimizer, LightningOptimizer],
+        optimizer_closure: Optional[Callable[[], Any]] = None,
+    ) -> None:
+        super().optimizer_step(epoch, batch_idx, optimizer, optimizer_closure)
+        self.sae.make_decoder_weights_unit_norm()
+
+    def on_save_checkpoint(self, checkpoint):
+        if 'reconstruction_loss_metric' in checkpoint:
+            del checkpoint['reconstruction_loss_metric']
+        return checkpoint
+
+    @classmethod
+    def load_from_checkpoint(
+        cls,
+        checkpoint_path: Union[_PATH, IO],
+        llm: HookedTransformer,
+        text_dataset: Iterable,
+        map_location: _MAP_LOCATION_TYPE = None,
+        hparams_file: Optional[_PATH] = None,
+        strict: bool = True,
+        **kwargs: Any,
+    ) -> Self:
+        sae = HookedSparseAutoencoder(768, 8*768)
+        checkpoint = torch.load(checkpoint_path, map_location=map_location)
+        state_dict = checkpoint['state_dict']
+        # filter for sae.
+        state_dict = {k: v for k, v in state_dict.items() if k.startswith('sae')}
+        # remove sae. prefix
+        state_dict = {k[4:]: v for k, v in state_dict.items()}
+        sae.load_state_dict(state_dict)
+
+        # TODO: this is a hack to get the reconstruction loss metric to load
+        reconstruction_loss_metric = ReconstructionLoss(llm, sae, text_dataset, None)
+        dead_features_resampler = DeadFeatureResampler(sae, None, 200000, 768, 8*768)
+        model = super().load_from_checkpoint(checkpoint_path, map_location, hparams_file, strict, sae=sae,
+                                             reconstruction_loss_metric=reconstruction_loss_metric,
+                                             dead_features_resampler=dead_features_resampler, **kwargs)
+        return model
+
+    @property
+    def W_enc(self):
+        return self.sae.encoder_map.weight
+
+    @property
+    def b_enc(self):
+        return self.sae.encoder_map.bias
+
+    @property
+    def W_dec(self):
+        return self.sae.decoder_map.weight
+
+    @property
+    def b_tied(self):
+        return self.sae.tied_bias

@@ -1,58 +1,48 @@
 import torch
+from torch import nn
 from torch.utils.data import IterableDataset
 from torchmetrics import Metric
 from transformer_lens import HookedTransformer
 
+from HookedSparseAutoencoder import HookedSparseAutoencoder
+
 
 class DeadFeatureResampler(Metric):
-    def __init__(self, llm: HookedTransformer, text_dataset: IterableDataset, sae_component, num_samples,
+    def __init__(self, sae: HookedSparseAutoencoder, loader, num_samples,
+                 actv_size,
                  n_features,
                  **kwargs):
         super().__init__(**kwargs)
-        self.llm = llm
-        self.text_dataset = iter(text_dataset)
+        self.sae = sae
+        self.loader = loader
         self.losses = None
         self.buffer = None  # initialized later
-        self.actv_size = None  # computed from cache
-        self.actv_name = sae_component
         self.num_samples = num_samples
         self.n_features = n_features
+        self.actv_size = actv_size
 
         self.add_state("dead_neurons", default=torch.zeros(n_features, dtype=torch.int), dist_reduce_fx="sum")
 
     def update(self, features: torch.Tensor):
-        self.dead_neurons += (features > 0.).sum(dim=0)
+        self.dead_neurons += (features > 1e-6).sum(dim=0)
 
     @torch.no_grad()
-    def compute_losses(self):
+    def compute_losses(self, loader):
+        self.buffer = torch.empty((self.num_samples, self.actv_size), dtype=torch.float32, device='cpu')
+        self.losses = torch.empty((self.num_samples,), dtype=torch.float32, device='cpu')
 
-        for i in range(1000000):
-            batch = next(self.text_dataset)
-            # only take half of it because the size of the batch might be optimized for the activation extraction
-            # and now we have to feedforward the whole network which consumes more memory
-            batch = batch[:16]
-            batch[:, 0] = self.llm.tokenizer.bos_token_id
-            names_filter = lambda name_: self.actv_name in name_
-            batch = batch.to(self.llm.W_E.device)
-            token_loss, cache = self.llm.run_with_cache(batch, names_filter=names_filter, return_type='loss',
-                                                        loss_per_token=True)
-            if i == 0:
-                self.actv_size = cache[self.actv_name].shape[-1]
-                self.buffer = torch.empty((self.num_samples, self.actv_size), dtype=torch.float32, device='cpu')
-                self.losses = torch.empty((self.num_samples,), dtype=torch.float32, device='cpu')
-            acts = cache[self.actv_name]
-            acts = acts[:, :-1, :]  # remove the last token for which we don't have a loss
-            acts = acts.reshape(-1, self.actv_size)
-            token_loss = token_loss.view(-1)
+        for i, X in enumerate(loader):
+            X = X.to(self.sae.decoder_map.weight.device)
+            recons, features = self.sae(X)
+            token_loss = nn.functional.mse_loss(X, recons, reduction='none').mean(dim=-1)
 
-            # always -1 because the last token has no loss
-            start = i * acts.shape[0]
-            end = start + acts.shape[0]
+            start = i * X.shape[0]
+            end = start + X.shape[0]
             if end > self.buffer.shape[0]:
                 end = self.buffer.shape[0]
-                acts = acts[:end - start]
+                X = X[:end - start]
                 token_loss = token_loss[:end - start]
-            self.buffer[start:end] = acts.to('cpu')
+            self.buffer[start:end] = X.to('cpu')
             self.losses[start:end] = token_loss.to('cpu')
 
             # buffer is full
@@ -71,7 +61,7 @@ class DeadFeatureResampler(Metric):
         if len(idx_dead) == 0:
             return W_enc, b_enc, W_dec, b_tied
 
-        self.compute_losses()
+        self.compute_losses(self.loader)
         idx = torch.multinomial(self.losses, idx_dead.numel())
         new_directions = self.buffer[idx].to(W_enc.device)
 
@@ -81,7 +71,7 @@ class DeadFeatureResampler(Metric):
 
         # For the corresponding encoder vector, renormalize the input vector to equal the average norm of the encoder
         # weights for alive neurons × 0.2.
-        W_enc.data[idx_dead] = W_enc[idx_dead] / W_enc[idx_dead].norm(dim=-1, keepdim=True) * 0.2 * W_enc[~idx_dead].norm(dim=-1).mean()
+        W_enc.data[idx_dead] = new_directions / new_directions.norm(dim=-1, keepdim=True) * 0.2 * W_enc[~idx_dead].norm(dim=-1).mean()
 
         # Set the corresponding encoder bias element to zero.
         b_enc.data[idx_dead] = 0.

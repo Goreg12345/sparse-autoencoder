@@ -11,7 +11,7 @@ class L0Loss(Metric):
 
     def update(self, features: torch.Tensor):
         self.l0_loss += (features > 0.).sum()
-        self.total += features.numel()
+        self.total += features.shape[0]
 
     def compute(self):
         return self.l0_loss.float() / self.total
