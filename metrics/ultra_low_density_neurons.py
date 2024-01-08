@@ -20,7 +20,7 @@ class UltraLowDensityNeurons(Metric):
         self.add_state("total", default=torch.zeros(1, dtype=torch.int), dist_reduce_fx="sum")
 
     def update(self, features: torch.Tensor):
-        self.num_active += (features > 0.).sum(dim=0)
+        self.num_active += (features > 1e-7).sum(dim=0)
         self.total += features.shape[0]
 
     def compute(self):

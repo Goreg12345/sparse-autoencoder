@@ -22,7 +22,8 @@ class SparseAutoencoder(pl.LightningModule):
 
     def __init__(self, sae: HookedSparseAutoencoder, resampling_steps: List, n_resampling_watch_steps,
                  l1_coefficient: float = 6e-3, reconstruction_loss_metric=None,
-                 dead_features_resampler: DeadFeatureResampler = None, lr=1e-3, *args, **kwargs):
+                 dead_features_resampler: DeadFeatureResampler = None, lr=1e-3,
+                 l1_scheduler: Callable = None, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.sae = sae
         self.l1_coefficient = l1_coefficient
@@ -31,6 +32,7 @@ class SparseAutoencoder(pl.LightningModule):
         self.l0_loss = L0Loss()
         self.low_freq_metric = UltraLowDensityNeurons(sae.d_hidden)
         self.lr = lr
+        self.l1_scheduler = l1_scheduler
 
         # this one will be used to track dead neurons for the neuron resampling method
         self.resampling_steps = resampling_steps
@@ -71,6 +73,9 @@ class SparseAutoencoder(pl.LightningModule):
                 w = self.dead_features_resampler.compute(*self.sae.get_weights(), self.trainer.optimizers[0])
                 self.dead_features_resampler.reset()
                 self.sae.set_weights(*w)
+
+        if self.l1_scheduler:
+            self.l1_coefficient = self.l1_scheduler(batch_idx)
 
         return loss.float()
 

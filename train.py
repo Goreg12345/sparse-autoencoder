@@ -1,6 +1,8 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+import text_dataset
 
+os.environ["CUDA_VISIBLE_DEVICES"] = "2"
+# execute system command
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
@@ -14,39 +16,42 @@ from metrics.reconstruction_loss import ReconstructionLoss
 from neel_buffer import Buffer
 from text_dataset import TextDataset
 
+
 cfg = {
     # EXTRACTION
-    'actv_size': 768,
-    'buffer_size': 1e5,
+    'actv_size': 768 * 4,
+    'buffer_size': 1e7,
     'extraction_batch_size': 500,
-    'actv_name': 'blocks.8.mlp.hook_post',  # 'blocks.8.hook_resid_post',
-    'layer': 8,
-    'seq_len': 512.,
-    'dataset_name': "monology/pile-uncopyrighted",  # togethercomputer/RedPajama-Data-1T-Sample roneneldan/TinyStories
+    'actv_name': 'blocks.0.mlp.hook_post',  # 'blocks.8.hook_resid_post',
+    'layer': 0,
+    'seq_len': 512,
+    'dataset_name': "Skylion007/openwebtext",  # togethercomputer/RedPajama-Data-1T-Sample roneneldan/TinyStories
 
     # AUTOENCODER
-    'train_steps': 500000,
-    'batch_size': 4096,
-    'd_hidden': 768 * 8,
-    'l1_coefficient': 1.4e-2,
+    'train_steps': 200000,
+    'batch_size': 2048,
+    'd_hidden': 764 * 8 * 4,
+    'l1_coefficient': 0.5e-2,  # 1.4e-2,
     'lr': 2e-4,
     'resampling_steps': [50000, 100000, 150000, 200000],
     'n_resampling_watch_steps': 10000,
+    # 'head': 9,
 
     # METRICS
     'reconstruction_loss_batch_size': 16,
     'n_resampler_samples': 819200,
 
     # LOGGING
-    'wandb_name': 'sae_pile',
-    'ckpt_name': 'sae_pile_2B_l1=1.4e-2_lr=2e-4_pile_8x.ckpt',
+    'wandb_name': 'sae_mlp_0',
+    'ckpt_name': 'sae_mlp_0_0.4B_l1=1.4e-2_lr=2e-4_owt_8x.ckpt',
 }
 
 if __name__=='__main__':
     # LOAD DATA
-    dataset = load_dataset(cfg['dataset_name'], split="train")
+    dataset = load_dataset(cfg['dataset_name'], split='train')
     if 'TinyStories' in str(dataset) or 'pile' in str(dataset):
         dataset = dataset['train']
+    dataset = dataset.shuffle()
 
     llm = HookedTransformer.from_pretrained(
         model_name='gpt2-small',
@@ -55,11 +60,11 @@ if __name__=='__main__':
     )
     llm.requires_grad_(False)
 
-    text_dataset = TextDataset(dataset, llm.to_tokens, cfg['extraction_batch_size'], drop_last_batch=False,
-                               seq_len=cfg['seq_len'])
-    # don't increase num_workers > 1 because it's an IterableDataset and multiple dataloaders will yield the same data
-    text_dataset_loader = iter(DataLoader(text_dataset, batch_size=None, shuffle=False, num_workers=1,
-                                          prefetch_factor=200))
+    token_dataset = TextDataset(dataset, llm.to_tokens, cfg['extraction_batch_size'], drop_last_batch=False,
+                                seq_len=cfg['seq_len'])
+
+    text_dataset_loader = iter(DataLoader(token_dataset, batch_size=None, shuffle=False, num_workers=5,
+                                          prefetch_factor=5, worker_init_fn=text_dataset.worker_init_fn))
     buffer = Buffer(
         llm.cuda(),
         text_dataset_loader,
@@ -77,8 +82,23 @@ if __name__=='__main__':
                                                     , cfg['actv_name'])
 
     resampler = DeadFeatureResampler(sae, loader, cfg['n_resampler_samples'], cfg['actv_size'], cfg['d_hidden'])
+
+
+    def linear_growth_scheduler(batch_idx):
+        base_value = cfg['l1_coefficient']
+        final_step = 5000
+        start_multiplier = 0.01
+        if batch_idx >= final_step:
+            return base_value
+        else:
+            start_value = base_value * start_multiplier
+            # Linear interpolation from start_value to base_value
+            return start_value + (base_value - start_value) * (batch_idx / final_step)
+
+
     model = SparseAutoencoder(sae, cfg['resampling_steps'], cfg['n_resampling_watch_steps'],
-                              cfg['l1_coefficient'], reconstruction_loss_metric, resampler, cfg['lr'])
+                              cfg['l1_coefficient'], reconstruction_loss_metric, resampler, cfg['lr'],
+                              l1_scheduler=linear_growth_scheduler)
 
     # TRAINING
     wandb_logger = pl.loggers.WandbLogger(project='serimats', config=cfg, name=cfg['wandb_name'])

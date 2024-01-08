@@ -1,8 +1,4 @@
-import os
-
 from DeadFeatureResampler import DeadFeatureResampler
-
-os.environ["CUDA_VISIBLE_DEVICES"] = "2"
 
 import torch
 import einops
@@ -14,26 +10,26 @@ from HookedSparseAutoencoder import HookedSparseAutoencoder
 from SparseAutoencoder import SparseAutoencoder
 from metrics.reconstruction_loss import ReconstructionLoss
 from text_dataset import TextDataset
-
+import time
 
 class Buffer(IterableDataset):
     """
     This defines a data buffer, to store a bunch of MLP acts that can be used to train the autoencoder. It'll automatically run the model to generate more when it gets halfway empty.
     """
 
-    def __init__(self, llm, dataset, buffer_size, actv_size, seq_len, buffer_batches, extraction_batch_size, actv_name, layer, batch_size ):
-        self.buffer = torch.zeros((int(buffer_size), actv_size), requires_grad=False).to('cpu')
+    def __init__(self, llm, dataset, buffer_size, actv_size, seq_len, extraction_batch_size, actv_name, layer, batch_size, head=None, **kwargs ):
+        self.buffer_size = buffer_size
         self.token_pointer = 0
         self.first = True
         self.llm = llm
-        self.buffer_batches = buffer_batches
         self.extraction_batch_size = extraction_batch_size
         self.actv_name = actv_name
         self.layer = layer
         self.actv_size = actv_size
         self.batch_size = batch_size
         self.seq_len = seq_len
-
+        if head is not None:
+            self.head = head
         self.dataset = dataset
         print('setting up now')
         self.refresh()
@@ -43,16 +39,22 @@ class Buffer(IterableDataset):
         names_filter = lambda name_: self.actv_name in name_
         batch = batch.to(self.llm.W_E.device)
         _, cache = self.llm.run_with_cache(batch, stop_at_layer=self.layer + 1, names_filter=names_filter)
-        acts = cache[self.actv_name].reshape(-1, self.actv_size)
+        acts = cache[self.actv_name]
+        if len(acts.shape) == 4:  # batch seq head dim
+            acts = acts[..., self.head, :]
+        acts = acts.view(-1, self.actv_size)  # view faster?
 
         # if the buffer is close to full, we might not be able to fit the whole batch in
         end = self.pointer + acts.shape[0] if self.pointer + acts.shape[0] < self.buffer.shape[0] else self.buffer.shape[0]
-        self.buffer[self.pointer:end] = acts[:end - self.pointer]
+        # self.buffer[self.pointer:end] = acts[:end - self.pointer]
+        # copy asynchronously to the cpu buffer because these are multiple GB of activations
+        self.buffer[self.pointer:end].copy_(acts[:end - self.pointer], non_blocking=True)
         self.pointer = end
         print('new batch added to buffer')
 
     @torch.no_grad()
     def refresh(self):
+        self.buffer = torch.empty((int(self.buffer_size), self.actv_size), requires_grad=False, device='cpu', dtype=torch.float32).pin_memory()
         # TODO: if last batch is too small, need to add it to the buffer and then resize the buffer
         self.pointer = 0
         while True:
@@ -68,6 +70,7 @@ class Buffer(IterableDataset):
             self.add_batch_to_buffer(batch)
 
         self.pointer = 0
+        torch.cuda.synchronize()  # wait for the cpu buffer to be filled via asynchronous copying from gpu memory
         self.buffer = self.buffer[torch.randperm(self.buffer.shape[0]).to('cpu')]
 
     def __iter__(self):
