@@ -41,8 +41,13 @@ class Buffer(IterableDataset):
         _, cache = self.llm.run_with_cache(batch, stop_at_layer=self.layer + 1, names_filter=names_filter)
         acts = cache[self.actv_name]
         if len(acts.shape) == 4:  # batch seq head dim
-            acts = acts[..., self.head, :]
-        acts = acts.view(-1, self.actv_size)  # view faster?
+            if self.head == 'concat':
+                acts = acts.reshape(-1, acts.shape[-1] * acts.shape[-2])
+            else:
+                acts = acts[..., self.head, :]
+                acts = acts.reshape(-1, acts.shape[-1])
+        else:
+            acts = acts.view(-1, self.actv_size)  # view faster?
 
         # if the buffer is close to full, we might not be able to fit the whole batch in
         end = self.pointer + acts.shape[0] if self.pointer + acts.shape[0] < self.buffer.shape[0] else self.buffer.shape[0]

@@ -71,7 +71,9 @@ class DeadFeatureResampler(Metric):
 
         # For the corresponding encoder vector, renormalize the input vector to equal the average norm of the encoder
         # weights for alive neurons × 0.2.
-        W_enc.data[idx_dead] = new_directions / new_directions.norm(dim=-1, keepdim=True) * 0.2 * W_enc[~idx_dead].norm(dim=-1).mean()
+        alive = torch.ones_like(W_dec.data[0], dtype=torch.bool)
+        alive[idx_dead] = 0.
+        W_enc.data[idx_dead] = new_directions / new_directions.norm(dim=-1, keepdim=True) * 0.2 * W_enc[alive].norm(dim=-1).mean()
 
         # Set the corresponding encoder bias element to zero.
         b_enc.data[idx_dead] = 0.

@@ -10,7 +10,7 @@ class L0Loss(Metric):
         self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
 
     def update(self, features: torch.Tensor):
-        self.l0_loss += (features > 0.).sum()
+        self.l0_loss += (features > 1e-8).sum()
         self.total += features.shape[0]
 
     def compute(self):
