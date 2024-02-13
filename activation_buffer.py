@@ -6,8 +6,8 @@ from torch.utils.data import IterableDataset, DataLoader
 from tqdm import tqdm
 import pytorch_lightning as pl
 
-from HookedSparseAutoencoder import HookedSparseAutoencoder
 from SparseAutoencoder import SparseAutoencoder
+from SAETrainer import SAETrainer
 from metrics.reconstruction_loss import ReconstructionLoss
 from text_dataset import TextDataset
 import time

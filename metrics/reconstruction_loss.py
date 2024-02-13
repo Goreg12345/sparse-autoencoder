@@ -3,11 +3,11 @@ from torch.utils.data import IterableDataset
 from torchmetrics import Metric
 from transformer_lens import HookedTransformer
 
-from HookedSparseAutoencoder import HookedSparseAutoencoder
+from SparseAutoencoder import SparseAutoencoder
 
 
 class ReconstructionLoss(Metric):
-    def __init__(self, llm: HookedTransformer, sae: HookedSparseAutoencoder, text_dataset: IterableDataset,
+    def __init__(self, llm: HookedTransformer, sae: SparseAutoencoder, text_dataset: IterableDataset,
                  sae_component, head=None, ablation_type='zero', **kwargs):
         super().__init__(**kwargs)
 
@@ -74,3 +74,14 @@ class ReconstructionLoss(Metric):
 
     def compute(self):
         return self.reconstruction_score / self.total
+
+    # Don't return any parameters, otherwise they will be saved in the checkpoint
+    # or tracked by the optimizer
+    def parameters(self, recurse: bool = True):
+        return iter([])
+
+    def named_parameters(self, prefix: str = '', recurse: bool = True):
+        return iter([])
+
+    def state_dict(self, destination=None, prefix='', keep_vars=False):
+        return {}
