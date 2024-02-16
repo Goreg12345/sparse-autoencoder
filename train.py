@@ -1,18 +1,87 @@
+import argparse
 import os
-import text_dataset
+
+# Default configuration
+cfg = {
+    'actv_size': 64,
+    'buffer_size': 1e7,
+    'extraction_batch_size': 100,
+    'actv_name': 'blocks.8.attn.hook_z',
+    'layer': 8,
+    'seq_len': 512,
+    'dataset_name': "Skylion007/openwebtext",
+    'language_model': 'gpt2-small',
+    'train_steps': 122071,  # 250 M
+    'batch_size': 2048,
+    'd_hidden': 64 * 128,
+    'l1_coefficient': .08,
+    'standardize_activations': True,
+    'init_geometric_median': False,
+    'lr': 1e-3,
+    'resampling_steps': [50000], # , 100000, 150000, 200000],
+    'n_resampling_watch_steps': 5000,
+    'lr_warmup_steps': 3000,
+    'head': 6,
+    'l1_exponent': 1,
+    'reconstruction_loss_batch_size': 16,
+    'n_resampler_samples': 819200,
+    'wandb_name': '',
+    'ckpt_name': '',
+}
+
+parser = argparse.ArgumentParser(description="Train an SAE with configurable parameters")
+
+# Add arguments for configuration parameters
+parser.add_argument("--gpu_num", type=int, help="GPU number to use")
+parser.add_argument("--actv_size", type=int, help="Activation size, i.e. number of neurons in the layer to hook")
+parser.add_argument("--buffer_size", type=float, help="Buffer size, should be big, e.g. 1e7 to remove correlation of tokens of the same context")
+parser.add_argument("--extraction_batch_size", type=int, help="Extraction batch size")
+parser.add_argument("--actv_name", type=str, help="Activation function name")
+parser.add_argument("--layer", type=int, help="Transformer layer to hook")
+parser.add_argument("--seq_len", type=int, help="Sequence length")
+parser.add_argument("--dataset_name", type=str, help="Name of the dataset")
+parser.add_argument("--language_model", type=str, help="Pretrained language model")
+parser.add_argument("--train_steps", type=int, help="Number of training steps")
+parser.add_argument("--batch_size", type=int, help="Batch size for training")
+parser.add_argument("--d_hidden", type=int, help="Hidden layer dimension")
+parser.add_argument("--l1_coefficient", type=float, help="L1 regularization coefficient")
+parser.add_argument("--standardize_activations", type=bool, help="Whether to standardize activations")
+parser.add_argument("--init_geometric_median", type=bool, help="Whether to initialize using geometric median")
+parser.add_argument("--lr", type=float, help="Learning rate")
+parser.add_argument("--resampling_steps", type=int, nargs='+', help="Steps at which to resample dead features")
+parser.add_argument("--n_resampling_watch_steps", type=int, help="Number of steps to watch for resampling")
+parser.add_argument("--lr_warmup_steps", type=int, help="Number of warmup steps for learning rate")
+parser.add_argument("--head", type=int, help="Head number for multi-head attention")
+parser.add_argument("--l1_exponent", type=float, help="Exponent for L1 regularization, use 1 for L1 or 0.5 for l0.5")
+parser.add_argument("--reconstruction_loss_batch_size", type=int, help="Batch size for reconstruction loss calculation")
+parser.add_argument("--n_resampler_samples", type=int, help="Number of samples for resampler")
+parser.add_argument("--wandb_name", type=str, help="Weights & Biases experiment name")
+parser.add_argument("--ckpt_name", type=str, help="Checkpoint name for saving/loading model")
+
+# Parse arguments
+args = parser.parse_args()
+
+# Set GPU number from command line argument, if provided
+if args.gpu_num is not None:
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(args.gpu_num)
+
+# Update cfg with any command-line arguments provided
+for key, value in vars(args).items():
+    if value is not None:
+        cfg[key] = value
+
+cfg['wandb_name'] = f"{cfg['actv_name'].split('_')[-1]}-{cfg['wandb_name']}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{cfg['train_steps'] * cfg['batch_size'] / 1e6}M"
+cfg['ckpt_name'] = f"{cfg['actv_name'].split('_')[-1]}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{cfg['train_steps'] * cfg['batch_size'] / 1e6}M.ckpt"
+
+
+# init torch only after setting the GPU
 import sys
-
-# get first argument from command line
-gpu_num = int(sys.argv[1])
-
-os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_num)
-# execute system command
 import torch
 from datasets import load_dataset
 from torch.utils.data import DataLoader
-from transformer_lens import HookedTransformer
 import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
+from transformer_lens import HookedTransformer
 
 from DeadFeatureResampler import DeadFeatureResampler
 from SparseAutoencoder import SparseAutoencoder
@@ -20,43 +89,7 @@ from SAETrainer import SAETrainer
 from metrics.reconstruction_loss import ReconstructionLoss
 from activation_buffer import Buffer
 from text_dataset import TextDataset
-
-
-cfg = {
-    # EXTRACTION
-    'actv_size': 64, # 768,
-    'buffer_size': 1e7,
-    'extraction_batch_size': 100,
-    'actv_name': 'blocks.10.attn.hook_z', # hook_mlp_out',  # 'blocks.8.hook_resid_post',
-    'layer': 10,
-    'seq_len': 512,
-    'dataset_name': "Skylion007/openwebtext",  # togethercomputer/RedPajama-Data-1T-Sample roneneldan/TinyStories
-    'language_model': 'gpt2-small',
-
-    # AUTOENCODER
-    'train_steps': 400000,
-    'batch_size': 2048,
-    'd_hidden': 64 * 128,
-    'l1_coefficient': 0.06,# 7e-1,#1e-3,# 1e-2,  # 1.4e-2,
-    'standardize_activations': True,
-    'init_geometric_median': False,
-    'lr': 1e-3,
-    'resampling_steps': [50000, 100000, 150000, 200000],
-    'n_resampling_watch_steps': 5000,
-    'lr_warmup_steps': 3000,
-    'head': 0,
-
-    # METRICS
-    'reconstruction_loss_batch_size': 16,
-    'n_resampler_samples': 819200,
-
-    # LOGGING
-    'wandb_name': '',
-    'ckpt_name': '', #'q-l9h9-40M-l1_5e-2.ckpt', # 1B_l1=1.4e-2_lr=2e-4_owt_8x.ckpt',
-}
-
-cfg['wandb_name'] = f"{cfg['actv_name'].split('_')[-1]}-{cfg['wandb_name']}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{cfg['train_steps'] * cfg['batch_size'] / 1e6}M"
-cfg['ckpt_name'] = f"{cfg['actv_name'].split('_')[-1]}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{cfg['train_steps'] * cfg['batch_size'] / 1e6}M.ckpt"
+import text_dataset
 
 
 def linear_growth_scheduler(batch_idx):
@@ -120,8 +153,8 @@ if __name__=='__main__':
     checkpoint_callback = ModelCheckpoint(
         dirpath='models',  # Specify your checkpoint directory
         filename='{step}',  # Optional: customize your checkpoint filename
-        every_n_train_steps=19999,  # Save a checkpoint every n training steps
-        save_last=True,  # Optional: set to -1 to save all checkpoints, adjust as needed
+        every_n_train_steps=122070,  # Save a checkpoint every n training steps
+        save_last=-1,  # Optional: set to -1 to save all checkpoints, adjust as needed
     )
     model = SAETrainer(sae, cfg['resampling_steps'], cfg['n_resampling_watch_steps'],
                        cfg['l1_coefficient'], reconstruction_loss_metric_zero, reconstruction_loss_metric_mean,
@@ -130,9 +163,9 @@ if __name__=='__main__':
 
     # TRAINING
 
-    wandb_logger = pl.loggers.WandbLogger(project='serimats', config=cfg, name=cfg['wandb_name'], log_model=True)
+    wandb_logger = pl.loggers.WandbLogger(project='serimats', config=cfg, name=cfg['wandb_name'], log_model='all')
     trainer = pl.Trainer(devices=[0], max_steps=cfg['train_steps'], logger=wandb_logger,
-                         val_check_interval=2000, limit_val_batches=5, limit_test_batches=5,
+                         val_check_interval=5000, limit_val_batches=25, limit_test_batches=25,
                         callbacks=[checkpoint_callback]
                          )
     trainer.fit(model, loader, loader)

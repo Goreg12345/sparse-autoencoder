@@ -26,7 +26,7 @@ class SAETrainer(pl.LightningModule):
                  l1_coefficient: float = 6e-3, reconstruction_loss_metric_zero=None,
                  reconstruction_loss_metric_mean=None,
                  dead_features_resampler: DeadFeatureResampler = None, lr=1e-3,
-                 l1_scheduler: Callable = None, lr_warmup_steps = None, *args, **kwargs):
+                 l1_scheduler: Callable = None, lr_warmup_steps = None, l1_exponent=1, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.sae = sae
         self.l1_coefficient = l1_coefficient
@@ -38,6 +38,7 @@ class SAETrainer(pl.LightningModule):
         self.frequency_hist = UltraLowDensityNeurons(sae.d_hidden)
         self.lr = lr
         self.l1_scheduler = l1_scheduler
+        self.l1_exponent = l1_exponent
 
         # this one will be used to track dead neurons for the neuron resampling method
         self.resampling_steps = resampling_steps
@@ -52,8 +53,13 @@ class SAETrainer(pl.LightningModule):
         return self.sae(X)
 
     def criterion(self, X_hat, X, feature_activations):
+        # mse = nn.functional.mse_loss(X_hat, X, reduction='mean')
+        # for mse use standardized activations and reconstructions because l1 is applied to standardized activations
+        # this helps to achieve same l0 for different layers
+        X = (X - self.sae.mean) / self.sae.standard_norm
+        X_hat = (X_hat - self.sae.mean) / self.sae.standard_norm
         mse = nn.functional.mse_loss(X_hat, X, reduction='mean')
-        l1 = self.l1_coefficient * (feature_activations.abs()**1).sum(dim=1).mean()
+        l1 = self.l1_coefficient * (feature_activations.abs()**self.l1_exponent).sum(dim=1).mean()
         return mse + l1, mse, l1
 
     def training_step(self, batch, batch_idx):
