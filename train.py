@@ -70,8 +70,8 @@ for key, value in vars(args).items():
     if value is not None:
         cfg[key] = value
 
-cfg['wandb_name'] = f"{cfg['actv_name'].split('_')[-1]}-{cfg['wandb_name']}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{cfg['train_steps'] * cfg['batch_size'] / 1e6}M"
-cfg['ckpt_name'] = f"{cfg['actv_name'].split('_')[-1]}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{cfg['train_steps'] * cfg['batch_size'] / 1e6}M.ckpt"
+cfg['wandb_name'] = f"{cfg['actv_name'].split('_')[-1]}-{cfg['wandb_name']}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{(cfg['train_steps'] * cfg['batch_size'] / 1e6):.0f}M"
+cfg['ckpt_name'] = f"{cfg['actv_name'].split('_')[-1]}-l{cfg['layer']}h{cfg['head']}-l1_{cfg['l1_coefficient']}-{(cfg['train_steps'] * cfg['batch_size'] / 1e6):.0f}M.ckpt"
 
 
 # init torch only after setting the GPU

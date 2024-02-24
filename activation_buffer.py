@@ -34,6 +34,7 @@ class Buffer(IterableDataset):
         print('setting up now')
         self.refresh()
 
+    @torch.no_grad()
     def add_batch_to_buffer(self, batch):
         batch[:, 0] = self.llm.tokenizer.bos_token_id
         names_filter = lambda name_: self.actv_name in name_

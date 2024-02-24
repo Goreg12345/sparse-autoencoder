@@ -78,10 +78,17 @@ class SparseAutoencoder(nn.Module):
 
     @classmethod
     def load(self, path, cfg):
-      sae = SparseAutoencoder(cfg['actv_size'], cfg['d_hidden'], cfg=cfg)
-      checkpoint = torch.load(path)
-      state_dict = checkpoint['state_dict']
-      # remove sae. prefix
-      state_dict = {k.replace('sae.', ''): v for k, v in state_dict.items()}
-      sae.load_state_dict(state_dict)
-      return sae
+        sae = SparseAutoencoder(cfg['actv_size'], cfg['d_hidden'], cfg=cfg)
+        checkpoint = torch.load(path)
+        if 'state_dict' in checkpoint:
+            state_dict = checkpoint['state_dict']
+        else:
+            state_dict = checkpoint
+        # remove sae. prefix
+        state_dict = {k.replace('sae.', ''): v for k, v in state_dict.items()}
+        if 'mean' not in state_dict:
+            state_dict['mean'] = torch.zeros(cfg['actv_size'])
+        if 'standard_norm' not in state_dict:
+            state_dict['standard_norm'] = torch.tensor(1, dtype=torch.float32)
+        sae.load_state_dict(state_dict)
+        return sae

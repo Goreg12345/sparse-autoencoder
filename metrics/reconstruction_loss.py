@@ -8,7 +8,9 @@ from SparseAutoencoder import SparseAutoencoder
 
 class ReconstructionLoss(Metric):
     def __init__(self, llm: HookedTransformer, sae: SparseAutoencoder, text_dataset: IterableDataset,
-                 sae_component, head=None, ablation_type='zero', **kwargs):
+                 sae_component, head=None, ablation_type='zero', seq_position='all', **kwargs):
+        # seq_position: if 'all', the whole sequence is used for the reconstruction loss, if tensor with indices,
+        # only the indices are used for the reconstruction loss
         super().__init__(**kwargs)
 
         self.llm = llm
@@ -21,7 +23,14 @@ class ReconstructionLoss(Metric):
         elif ablation_type == 'mean':
             self.ablation_hook = self.mean_ablate_hook
 
-        self.add_state("reconstruction_score", default=torch.tensor(0.), dist_reduce_fx="sum")
+        # assert seq_position == 'all' or (type(seq_position) == torch.Tensor and all([type(i) == torch.int32 for i in seq_position]))
+        assert seq_position == 'all' or seq_position.shape != torch.Size([])
+        self.seq_position = seq_position
+
+        # self.add_state("reconstruction_score", default=torch.tensor(0.), dist_reduce_fx="sum")
+        self.add_state("zero_abl_loss", default=torch.tensor(0.), dist_reduce_fx="sum")
+        self.add_state("recons_loss", default=torch.tensor(0.), dist_reduce_fx="sum")
+        self.add_state("loss", default=torch.tensor(0.), dist_reduce_fx="sum")
         self.add_state("total", default=torch.tensor(0), dist_reduce_fx="sum")
 
     def replacement_hook(self, sae_input, hook):
@@ -64,16 +73,36 @@ class ReconstructionLoss(Metric):
         batch = next(self.text_dataset)
         # insert bos token
         batch[:, 0] = self.llm.tokenizer.bos_token_id
-        loss = self.llm(batch, return_type="loss")
-        recons_loss = self.llm.run_with_hooks(batch, return_type="loss", fwd_hooks=[
-            (self.sae_component, self.replacement_hook)])
-        zero_abl_loss = self.llm.run_with_hooks(batch, return_type="loss",
-                                             fwd_hooks=[(self.sae_component, self.ablation_hook)])
-        self.reconstruction_score += ((zero_abl_loss - recons_loss) / (zero_abl_loss - loss))
+        if self.seq_position == 'all':
+            loss = self.llm(batch, return_type="loss")
+            recons_loss = self.llm.run_with_hooks(batch, return_type="loss", fwd_hooks=[
+                (self.sae_component, self.replacement_hook)])
+            zero_abl_loss = self.llm.run_with_hooks(batch, return_type="loss",
+                                                 fwd_hooks=[(self.sae_component, self.ablation_hook)])
+        else:
+            loss = self.llm(batch, return_type="loss", loss_per_token=True)
+            recons_loss = self.llm.run_with_hooks(batch, return_type="loss", fwd_hooks=[
+                (self.sae_component, self.replacement_hook)], loss_per_token=True)
+            zero_abl_loss = self.llm.run_with_hooks(batch, return_type="loss",
+                                                 fwd_hooks=[(self.sae_component, self.ablation_hook)],
+                                                    loss_per_token=True)
+            loss = loss[:, self.seq_position].mean()
+            recons_loss = recons_loss[:, self.seq_position].mean()
+            zero_abl_loss = zero_abl_loss[:, self.seq_position].mean()
+        loss = loss.to(self.loss.device)
+        recons_loss = recons_loss.to(self.loss.device)
+        zero_abl_loss = zero_abl_loss.to(self.loss.device)
+        # print(f"loss: {loss}, recons_loss: {recons_loss}, zero_abl_loss: {zero_abl_loss}", f'reconstruction_score: {(zero_abl_loss - recons_loss) / (zero_abl_loss - loss)}')
+
+        # self.reconstruction_score += ((zero_abl_loss - recons_loss) / (zero_abl_loss - loss))
+        self.zero_abl_loss += zero_abl_loss
+        self.recons_loss += recons_loss
+        self.loss += loss
         self.total += 1
 
     def compute(self):
-        return self.reconstruction_score / self.total
+        return (self.zero_abl_loss / self.total - self.recons_loss / self.total) / (self.zero_abl_loss / self.total - self.loss / self.total)
+        #return self.reconstruction_score / self.total
 
     # Don't return any parameters, otherwise they will be saved in the checkpoint
     # or tracked by the optimizer
