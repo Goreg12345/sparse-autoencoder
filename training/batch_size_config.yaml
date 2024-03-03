@@ -1,0 +1,101 @@
+program: wandb_sweep.py
+name: batch_size_sweep
+method: grid
+metric:
+  name: val_combined_loss
+  goal: maximize
+parameters:
+  lr:
+    values:
+      - 0.001
+  beta1:
+    values:
+      - 0
+      - 0.9
+  beta2:
+    values:
+      - 0.999
+  batch_size:
+    values:
+      - 16
+      - 128
+      - 256
+      - 512
+      - 1024
+      - 2048
+      - 8192
+      - 32768
+      - 64000
+      - 128000
+      - 200000
+  d_hidden:
+    value: 2048
+  l1_coefficient:
+    values:
+      - 0.022
+  l1_exponent:
+    values:
+      - 1
+  train_steps:
+    values:
+      - 50000
+  resampling_steps:
+    values:
+      - []
+  lr_warmup_steps:
+    values:
+      - 3000
+  actv_size:
+    value: 64
+  buffer_size:
+    value: 1e7
+  actv_name:
+    value: blocks.9.attn.hook_z
+  layer:
+    value: 9
+  seq_len:
+    value: 512
+  dataset_name:
+    value: Skylion007/openwebtext
+  language_model:
+    value: gpt2-small
+  use_disc_dataset:
+    value: true
+  store_path:
+    value: /var/local/glang/activations
+  store_accessor:
+    value: tensor
+  store_size:
+    value: 1000000000
+  standardize_activations:
+    value: true
+  init_geometric_median:
+    values:
+      - false
+  n_resampling_watch_steps:
+    value: 5000
+  head:
+    value: 9
+  reconstruction_loss_batch_size:
+    value: 16
+  n_resampler_samples:
+    value: 819200
+  wandb_name:
+    value: ''
+  ckpt_name:
+    value: ''
+  extraction_batch_size:
+    value: 100
+  adjust_for_dict_size:
+    value: false
+  allow_lower_decoder_norm:
+    values:
+      - true
+  disable_decoder_bias:
+    values:
+      - false
+  start_lr_decay:
+    values:
+      - 80000
+  end_lr_decay:
+    value: 100000

@@ -6,7 +6,6 @@ import torch.nn.functional as F
 
 
 class SparseAutoencoder(nn.Module):
-
     def __init__(self, d_input, d_hidden, cfg=None, *args):
         super().__init__(*args)
 
@@ -19,7 +18,9 @@ class SparseAutoencoder(nn.Module):
         self.W_dec = nn.Parameter(torch.empty(d_hidden, d_input))
         self.b_dec = nn.Parameter(torch.empty(d_input))
         self.mean = nn.Parameter(torch.empty(d_input), requires_grad=False)
-        self.standard_norm = nn.Parameter(torch.tensor(1, dtype=torch.float32), requires_grad=False)
+        self.standard_norm = nn.Parameter(
+            torch.tensor(1, dtype=torch.float32), requires_grad=False
+        )
         # initialize
         self.reset_parameters()
 
@@ -40,19 +41,27 @@ class SparseAutoencoder(nn.Module):
 
     def init_geometric_median(self, acts):
         # standardize input
-        X = (acts - self.mean) / self.standard_norm
-        self.b_dec.data = X.mean(dim=0)
+        # X = (acts - self.mean) / self.standard_norm
+        # self.b_dec.data = X.mean(dim=0)
+        self.mean.data = acts.median(dim=0)[
+            0
+        ]  # median returns a tuple of (values, indices)
 
     def init_activation_standardization(self, acts):
-        self.mean.data = acts.mean(dim=0)
+        acts = acts - self.mean
         self.standard_norm.data = acts.norm(dim=1).mean()
+        if self.cfg["adjust_for_dict_size"]:
+            self.standard_norm.data = self.standard_norm.data * torch.sqrt(
+                torch.tensor(self.d_hidden, dtype=torch.float32)
+            )
 
     def encoder(self, X: torch.Tensor) -> torch.Tensor:
         # standardize input
         X = (X - self.mean) / self.standard_norm
         # subtract decoder bias
-        X = X - self.b_dec
-        X = X @ self.W_enc + self.b_enc # batch d_input, d_input d_hidden
+        if not self.cfg.get("disable_decoder_bias", False):
+            X = X - self.b_dec
+        X = X @ self.W_enc + self.b_enc  # batch d_input, d_input d_hidden
         return F.relu(X)
 
     def decoder(self, feature_activations: torch.Tensor) -> torch.Tensor:
@@ -65,30 +74,38 @@ class SparseAutoencoder(nn.Module):
         return X, feature_activations
 
     @torch.no_grad()
-    def make_decoder_weights_and_grad_unit_norm(self):
+    def make_grad_unit_norm(self):
         W_dec_normed = self.W_dec.data / self.W_dec.data.norm(dim=-1, keepdim=True)
-        W_dec_grad_proj = (self.W_dec.grad * W_dec_normed).sum(-1, keepdim=True) * W_dec_normed
+        W_dec_grad_proj = (self.W_dec.grad * W_dec_normed).sum(
+            -1, keepdim=True
+        ) * W_dec_normed
         self.W_dec.grad -= W_dec_grad_proj
-        # Bugfix(?) for ensuring W_dec retains unit norm, this was not there when I trained my original autoencoders.
-        self.W_dec.data = W_dec_normed
+
+        # self.W_dec.data = W_dec_normed
 
     def make_decoder_weights_unit_norm(self):
-        W_dec_normed = self.W_dec.data / self.W_dec.data.norm(dim=-1, keepdim=True)
-        self.W_dec.data = W_dec_normed
+        norm = self.W_dec.data.norm(dim=-1, keepdim=True)
+        if self.cfg["allow_lower_decoder_norm"]:
+            norm_greater_than_one = (norm > 1).view(-1)
+            self.W_dec.data[norm_greater_than_one] = (
+                self.W_dec.data[norm_greater_than_one] / norm[norm_greater_than_one]
+            )
+        else:
+            self.W_dec.data = self.W_dec.data / norm
 
     @classmethod
     def load(self, path, cfg):
-        sae = SparseAutoencoder(cfg['actv_size'], cfg['d_hidden'], cfg=cfg)
+        sae = SparseAutoencoder(cfg["actv_size"], cfg["d_hidden"], cfg=cfg)
         checkpoint = torch.load(path)
-        if 'state_dict' in checkpoint:
-            state_dict = checkpoint['state_dict']
+        if "state_dict" in checkpoint:
+            state_dict = checkpoint["state_dict"]
         else:
             state_dict = checkpoint
         # remove sae. prefix
-        state_dict = {k.replace('sae.', ''): v for k, v in state_dict.items()}
-        if 'mean' not in state_dict:
-            state_dict['mean'] = torch.zeros(cfg['actv_size'])
-        if 'standard_norm' not in state_dict:
-            state_dict['standard_norm'] = torch.tensor(1, dtype=torch.float32)
+        state_dict = {k.replace("sae.", ""): v for k, v in state_dict.items()}
+        if "mean" not in state_dict:
+            state_dict["mean"] = torch.zeros(cfg["actv_size"])
+        if "standard_norm" not in state_dict:
+            state_dict["standard_norm"] = torch.tensor(1, dtype=torch.float32)
         sae.load_state_dict(state_dict)
         return sae

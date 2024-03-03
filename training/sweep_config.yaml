@@ -1,0 +1,109 @@
+program: wandb_sweep.py
+name: sweepdemo
+method: random
+metric:
+  name: val_reconstruction_loss_mean
+  goal: maximize
+parameters:
+  lr:
+    values:
+      - 0.000001
+      - 0.000005
+      - 0.00001
+      - 0.00005
+      - 0.0001
+      - 0.0005
+      - 0.001
+      - 0.01
+  beta1:
+    values:
+      - 0
+      - 0.1
+      - 0.5
+      - 0.9
+  beta2:
+    values:
+      - 0
+      - 0.9
+      - 0.999
+      - 0.9999
+  batch_size:
+    values:
+      - 128
+      - 1024
+      - 2048
+      - 4096
+      - 8192
+  d_hidden:
+    values:
+      - 32
+      - 64
+      - 512
+      - 2048
+      - 8192
+      - 16384
+      - 32768
+  l1_coefficient:
+    min: 0.002
+    max: 0.2
+    distribution: uniform
+  l1_exponent:
+    values:
+      - 1
+      - 0.5
+  train_steps:
+    values:
+      - 20000
+      - 100000
+  resampling_steps:
+    values:
+      - [50000]
+      - []
+  lr_warmup_steps:
+    values:
+      - 1
+      - 500
+      - 3000
+      - 20000
+  actv_size:
+    value: 64
+  buffer_size:
+    value: 1e7
+  actv_name:
+    value: blocks.9.attn.hook_z
+  layer:
+    value: 9
+  seq_len:
+    value: 512
+  dataset_name:
+    value: Skylion007/openwebtext
+  language_model:
+    value: gpt2-small
+  use_disc_dataset:
+    value: true
+  store_path:
+    value: /var/local/glang/activations
+  store_accessor:
+    value: tensor
+  store_size:
+    value: 1000000000
+  standardize_activations:
+    value: true
+  init_geometric_median:
+    value: false
+  n_resampling_watch_steps:
+    value: 5000
+  head:
+    value: 9
+  reconstruction_loss_batch_size:
+    value: 16
+  n_resampler_samples:
+    value: 819200
+  wandb_name:
+    value: ''
+  ckpt_name:
+    value: ''
+  extraction_batch_size:
+    value: 100
+  adjust_for_dict_size:
+    value: false

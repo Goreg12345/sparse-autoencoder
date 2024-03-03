@@ -13,9 +13,17 @@ def worker_init_fn(worker_id):
     pointer_start = int(worker_id / num_workers * len(dataset.hf_dataset))
     dataset.set_token_pointer(pointer_start)
 
+
 class TextDataset(IterableDataset):
-    def __init__(self, hf_dataset, to_tokens: Callable, batch_size, drop_last_batch=False, hf_text_accessor='text',
-                 seq_len=128,):
+    def __init__(
+        self,
+        hf_dataset,
+        to_tokens: Callable,
+        batch_size,
+        drop_last_batch=False,
+        hf_text_accessor="text",
+        seq_len=128,
+    ):
         """
         Takes a huggingface dataset and returns batches of tokens
         :param hf_dataset: huggingface dataset that contains the text
@@ -46,7 +54,9 @@ class TextDataset(IterableDataset):
         return self
 
     def __next__(self):
-        batch = torch.empty((self.batch_size, self.seq_len), dtype=torch.long)#.to('cuda')
+        batch = torch.empty(
+            (self.batch_size, self.seq_len), dtype=torch.long
+        )  # .to('cuda')
 
         while True:
             # if dataset is exhausted, stop
@@ -54,12 +64,14 @@ class TextDataset(IterableDataset):
                 if self.drop_last_batch:
                     raise StopIteration
                 else:
-                    return batch[:self.batch_pointer]
+                    return batch[: self.batch_pointer]
 
             # get a new sample and add it to the batch
             # self.tokens += self.to_tokens(self.hf_dataset[self.token_pointer][self.hf_text_accessor], prepend_bos=False)[0]
-            self.tokens += self.to_tokens(self.hf_dataset[self.token_pointer][self.hf_text_accessor],
-                                          prepend_bos=False)[0]
+            self.tokens += self.to_tokens(
+                self.hf_dataset[self.token_pointer][self.hf_text_accessor],
+                prepend_bos=False,
+            )[0]
             # self.tokens += torch.randint(0, 50257, (1024,)).tolist()
             # self.hf_dataset[self.token_pointer]  # self.permutation[self.token_pointer].view(-1)]  # [self.hf_text_accessor]
             # self.permutation[self.token_pointer].view(-1)
@@ -70,8 +82,8 @@ class TextDataset(IterableDataset):
 
             # fill the batch row by row with tokens until we need to sample more or the batch is full
             while len(self.tokens) > self.seq_len:
-                batch[self.batch_pointer] = torch.tensor(self.tokens[:self.seq_len])
-                self.tokens = self.tokens[self.seq_len:]
+                batch[self.batch_pointer] = torch.tensor(self.tokens[: self.seq_len])
+                self.tokens = self.tokens[self.seq_len :]
                 self.batch_pointer += 1
                 if self.batch_pointer == self.batch_size:
                     break
