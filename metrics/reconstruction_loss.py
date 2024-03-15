@@ -67,7 +67,7 @@ class ReconstructionLoss(Metric):
         actvs_reconstr = actvs_reconstr.view(shape)
         return actvs_reconstr
 
-    def mean_ablate_hook(self, sae_input, hook):
+    def mean_ablate_hook(self, sae_input, hook):  # possible problem: it's not the real mean if the batch is small; it will be yield a lower reconstruction score than it should
         if (
             type(self.head) == int
         ):  # if we only use one head, don't average over the rest of the heads

@@ -1,4 +1,7 @@
+import re
 import sys, os
+
+from SparseAutoencoder import SparseAutoencoder
 
 try:
     gpu_num = int(sys.argv[1])
@@ -96,22 +99,72 @@ def sanity_check(ckpt_path, cfg, encoder):
         reconstruction_loss_metric_zero=reconstruction_loss_metric_zero,
     )
     trainer = pl.Trainer(limit_test_batches=5)
-    from IPython.display import display, HTML, clear_output
+    from IPython.display import clear_output
 
     clear_output()
     trainer.test(encoder_trainer, loader)
 
 
-if __name__ == "__main__":
+def is_available(node, project_name="sae-all-ioi-heads-low-l0", entity="mega-alignment"):
     api = wandb.Api()
-    run = api.run("mega-alignment/sae/9jyap5cc")  # this is the q-l9h9 sae with low l0
-    cfg = run.config
-    artifact_dir = api.artifact("georglange/serimats/model-9jyap5cc:v1").download()
 
-    ckpt_path = os.path.join(artifact_dir, "model.ckpt")
-    encoder = SAETrainer.load_from_checkpoint(
-        ckpt_path,
-        cfg,
-    ).sae
+    component_name, layer, head = node.component_name, node.layer, node.head
+    runs = api.runs(path=f"{entity}/{project_name}")
+    for run in runs:
+        run_component = run.name.split('--')[0]
+        run_layer = int(run.name.split('--')[1].split('h')[0][1:])
+        run_head = int(run.name.split('--')[1].split('h')[1].split('-')[0])
+        if run_component == component_name and run_layer == layer and run_head == head:
+            return True
+    return False
 
-    sanity_check(ckpt_path, cfg, encoder)
+
+def load_head_sae(layer: int, head: int, component: str, sae_name: str = None, project_name: str = "sae-all-ioi-heads-low-l0",
+                  entity: str = "mega-alignment",
+                  model_project_name: str = "serimats",
+                  model_entity_name: str = "georglange",
+                  version: str = "v25",
+                  perform_sanity_check=False) -> SparseAutoencoder:
+    """
+    Load an SAE from wandb that was trained on a single attention head. Runs must be named like {component}--l{layer}h{head}* or provided in sae_names.
+    :param layer: The LLM layer the SAE was trained on
+    :param head: The LLM head the SAE was trained on
+    :param component: The LLM component the SAE was trained on, e.g. 'z', 'q', 'k', 'v'
+    :param sae_name: The name or ID of the run on wandb. If None, the run will be selected based on the layer, head and component.
+    :param project_name: The wandb project name
+    :param entity: The wandb entity name
+    :param model_project_name: The model artifact project name on wandb
+    :param model_entity_name: The model artifact entity name on wandb
+    :param version: The model artifact version on wandb
+    :param perform_sanity_check: If True, the loaded model will be tested on a small dataset to check if it is working
+    :return: A SparseAutoencoder initialized with the weights of the trained SAE
+    """
+    api = wandb.Api()
+
+    if sae_name is not None:
+        run_name = sae_name
+    else:
+        run_name = rf"{component}--l{layer}h{head}-*"
+
+    runs = api.runs(path=f"{entity}/{project_name}")
+
+    selected_run = next((run for run in runs if re.match(run_name, run.name) or run.id == run_name), None)
+
+    if selected_run is None:
+        error_message = f"Run {run_name} not found. Layer: {layer}, head: {head}, component: {component}"
+        print(error_message)
+        raise ValueError(error_message)
+
+    artifact_name = f'model-{selected_run.id}:{version}'
+
+    artifact = api.artifact(type="model", name=f"{model_entity_name}/{model_project_name}/{artifact_name}")
+    if artifact is None:
+        raise ValueError(f"Artifact not found for {model_entity_name}/{model_project_name}/{artifact_name}.")
+    artifact_dir = artifact.download()
+
+    cfg = selected_run.config
+
+    encoder = SAETrainer.load_from_checkpoint(os.path.join(artifact_dir, 'model.ckpt'), cfg, ).sae
+    if perform_sanity_check:
+        sanity_check(os.path.join(artifact_dir, 'model.ckpt'), cfg, encoder)
+    return encoder

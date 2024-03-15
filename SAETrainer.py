@@ -69,7 +69,7 @@ class SAETrainer(pl.LightningModule):
         # this helps to achieve same l0 for different layers
         X = (X - self.sae.mean) / self.sae.standard_norm
         X_hat = (X_hat - self.sae.mean) / self.sae.standard_norm
-        if self.sae.cfg["adjust_for_dict_size"]:
+        if self.sae.cfg.get("adjust_for_dict_size", False):
             mse = ((X - X_hat) ** 2).sum(dim=1).mean()
         else:
             mse = nn.functional.mse_loss(X_hat, X, reduction="mean")
@@ -180,7 +180,7 @@ class SAETrainer(pl.LightningModule):
             self.log(
                 "val_combined_loss",
                 self.reconstruction_loss_metric_mean.compute()
-                * 2
+                * 4
                 / self.l0_loss.compute(),
             )
             self.reconstruction_loss_metric_mean.reset()

@@ -1,4 +1,6 @@
 import os
+import sys
+sys.path.append('/tmp/pycharm_project_451')
 
 import torch
 import wandb
@@ -132,8 +134,8 @@ def train(config):
     checkpoint_callback = ModelCheckpoint(
         dirpath="models",  # Specify your checkpoint directory
         filename="{step}",  # Optional: customize your checkpoint filename
-        every_n_train_steps=100000,  # Save a checkpoint every n training steps
-        save_last=-1,  # Optional: set to -1 to save all checkpoints, adjust as needed
+        every_n_train_steps=99999,  # Save a checkpoint every n training steps
+        # save_last=-1,  # Optional: set to -1 to save all checkpoints, adjust as needed
     )
     model = SAETrainer(
         sae,
@@ -153,7 +155,7 @@ def train(config):
     # TRAINING
 
     wandb_logger = pl.loggers.WandbLogger(
-        project="serimats", config=config, name=config["wandb_name"], log_model="all"
+        project="serimats", config=config, name=config["wandb_name"], log_model=True
     )
     trainer = pl.Trainer(
         devices=[0],

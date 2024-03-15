@@ -1,7 +1,7 @@
 #!/usr/bin/bash
 
 # Create a new sweep and extract its ID
-SWEEP_ID=$(wandb sweep --project serimats batch_size_config.yaml 2>&1 | grep 'Run sweep agent with: wandb agent' | awk '{print $NF}')
+SWEEP_ID=$(wandb sweep --project serimats training/l9h6_sweep_config.yaml 2>&1 | grep 'Run sweep agent with: wandb agent' | awk '{print $NF}')
 echo "Created sweep with ID: $SWEEP_ID"
 
 # Check if SWEEP_ID is empty

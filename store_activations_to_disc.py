@@ -4,20 +4,16 @@ import os
 # Default configuration
 cfg = {
     "actv_size": 64,
-    "store_size": int(1e9),
+    "store_size": int(2.5e8),
     "buffer_size": 1e7,
     "batch_size": int(1e6),
     "extraction_batch_size": 120,
-    "actv_name": [
-        "blocks.9.attn.hook_z",
-        "blocks.9.attn.hook_z",
-        "blocks.10.attn.hook_z",
-    ],
-    "layer": 10,
+    "actv_name": "blocks.9.attn.hook_z",
+    "layer": 9,
     "seq_len": 512,
     "dataset_name": "Skylion007/openwebtext",
     "language_model": "gpt2-small",
-    "head": [9, 6, 0],
+    "head": 6,
     "store_path": "/var/local/glang/activations",
 }
 
@@ -109,8 +105,8 @@ if __name__ == "__main__":
         )
     )
 
-    device = "cpu" if cfg["gpu_num"] is None else f'cuda:{cfg["gpu_num"]}'
-    llm.to(device)
+    # device = "cpu" if cfg["gpu_num"] is None else f'cuda:{cfg["gpu_num"]}'
+    llm.cuda()
 
     filename = f'{cfg["actv_name"].split("_")[-1]}-l{cfg["layer"]}h{cfg["head"]}-{(cfg["store_size"] / 1e6):.0f}M.h5'
 

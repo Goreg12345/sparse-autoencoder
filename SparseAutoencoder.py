@@ -50,7 +50,7 @@ class SparseAutoencoder(nn.Module):
     def init_activation_standardization(self, acts):
         acts = acts - self.mean
         self.standard_norm.data = acts.norm(dim=1).mean()
-        if self.cfg["adjust_for_dict_size"]:
+        if self.cfg.get("adjust_for_dict_size", False):
             self.standard_norm.data = self.standard_norm.data * torch.sqrt(
                 torch.tensor(self.d_hidden, dtype=torch.float32)
             )
