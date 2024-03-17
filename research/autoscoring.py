@@ -692,14 +692,18 @@ def name_x_pos(actv_counts, pattern, role, test_actv_counts=None, k=30):
 
 # On IO and S1 token
 
-def gender_score(actv_counts, io_node, s1_node, gender, is_male, test_actv_counts=None):
+def gender_score(actv_counts, io_node, gender, is_male, s1_node=None, test_actv_counts=None):
     if gender=='F':
         is_male = [not val for val in is_male]
     gender_names_idx = torch.tensor([i for i, val in enumerate(is_male) if val])
 
-    active_at_pattern = actv_counts['count', io_node, :, 'io', gender_names_idx].sum() + actv_counts['count', s1_node, :, 's', gender_names_idx].sum() 
-    total_at_pattern = actv_counts['total', io_node, :, 'io', gender_names_idx].sum() + actv_counts['total', s1_node, :, 's', gender_names_idx].sum()
-    active = actv_counts['count', io_node, :, 'io'].sum() + actv_counts['count', s1_node, :, 's'].sum() + 1e-8
+    active_at_pattern = actv_counts['count', io_node, :, 'io', gender_names_idx].sum()
+    total_at_pattern = actv_counts['total', io_node, :, 'io', gender_names_idx].sum() 
+    active = actv_counts['count', io_node, :, 'io'].sum() 
+    if s1_node is not None:
+        active_at_pattern += actv_counts['count', s1_node, :, 's', gender_names_idx].sum()
+        total_at_pattern += actv_counts['total', s1_node, :, 's', gender_names_idx].sum()
+        active += actv_counts['count', s1_node, :, 's'].sum()
 
     recall = active_at_pattern / total_at_pattern
     precision = active_at_pattern / active
@@ -715,9 +719,13 @@ def gender_score(actv_counts, io_node, s1_node, gender, is_male, test_actv_count
     }
 
     if test_actv_counts is not None:
-        active_at_pattern = test_actv_counts['count', io_node, :, 'io', gender_names_idx].sum() + test_actv_counts['count', s1_node, :, 's', gender_names_idx].sum() 
-        total_at_pattern = test_actv_counts['total', io_node, :, 'io', gender_names_idx].sum() + test_actv_counts['total', s1_node, :, 's', gender_names_idx].sum()
-        active = test_actv_counts['count', io_node, :, 'io'].sum() + test_actv_counts['count', s1_node, :, 's'].sum() + 1e-8
+        active_at_pattern = test_actv_counts['count', io_node, :, 'io', gender_names_idx].sum()
+        total_at_pattern = test_actv_counts['total', io_node, :, 'io', gender_names_idx].sum() 
+        active = test_actv_counts['count', io_node, :, 'io'].sum() 
+        if s1_node is not None:
+            active_at_pattern += test_actv_counts['count', s1_node, :, 's', gender_names_idx].sum()
+            total_at_pattern += test_actv_counts['total', s1_node, :, 's', gender_names_idx].sum()
+            active += test_actv_counts['count', s1_node, :, 's'].sum()
 
         recall = active_at_pattern / total_at_pattern
         precision = active_at_pattern / active
@@ -727,7 +735,7 @@ def gender_score(actv_counts, io_node, s1_node, gender, is_male, test_actv_count
         score['f_score_test'] = f_score.item()
     return score
 
-def name_score(actv_counts, io_node, s1_node, test_actv_counts=None, k=30):
+def name_score(actv_counts, io_node, s1_node=None, test_actv_counts=None, k=30):
 # shape of actv_counts: (measures, nodes, patterns, roles, names)
     assert len(actv_counts.maps['measures']) == actv_counts.shape[0]
     assert len(actv_counts.maps['ioi_nodes']) == actv_counts.shape[1]
@@ -736,9 +744,13 @@ def name_score(actv_counts, io_node, s1_node, test_actv_counts=None, k=30):
     assert len(actv_counts.maps['names']) == actv_counts.shape[4]
 
     # calculate recall, precision, f_score for each name
-    counts_at_name = actv_counts['count', io_node, :, 'io', :].sum(dim=0) + actv_counts['count', s1_node, :, 's', :].sum(dim=0) # -> (names,)
-    total_activations = actv_counts['total', io_node, :, 'io', :].sum(dim=0) + actv_counts['total', s1_node, :, 's', :].sum(dim=0)  # -> (names,)
-    n_active = (actv_counts['count', io_node, :, :, :].sum() + actv_counts['count', s1_node, :, :, :].sum()) / 2 + 1e-8 # -> (); prevent division by zero
+    counts_at_name = actv_counts['count', io_node, :, 'io', :].sum(dim=0) 
+    total_activations = actv_counts['total', io_node, :, 'io', :].sum(dim=0) 
+    n_active = (actv_counts['count', io_node, :, :, :].sum())  / 2 + 1e-8 # -> (); prevent division by zero
+    if s1_node is not None:
+        counts_at_name += actv_counts['count', s1_node, :, 's', :].sum(dim=0) # -> (names,)
+        total_activations += actv_counts['total', s1_node, :, 's', :].sum(dim=0)  # -> (names,)
+        n_active += actv_counts['count', s1_node, :, :, :].sum() / 2
 
     recalls = counts_at_name / total_activations
     precisions = counts_at_name / n_active
@@ -760,8 +772,11 @@ def name_score(actv_counts, io_node, s1_node, test_actv_counts=None, k=30):
     for k in range(2, k+1):
         selected_names = torch.topk(f_scores, k).indices
 
-        counts_at_name = (actv_counts['count', io_node, :, 'io', selected_names].sum() + actv_counts['count', s1_node, :, 's', selected_names].sum()).sum()
-        total_activations = (actv_counts['total', io_node, :, 'io', selected_names].sum() + actv_counts['total', s1_node, :, 's', selected_names].sum()).sum()
+        counts_at_name = actv_counts['count', io_node, :, 'io', selected_names].sum()
+        total_activations = actv_counts['total', io_node, :, 'io', selected_names].sum() 
+        if s1_node is not None:
+            counts_at_name += actv_counts['count', s1_node, :, 's', selected_names].sum()
+            total_activations += actv_counts['total', s1_node, :, 's', selected_names].sum()
 
         recall = counts_at_name / total_activations
         precision = counts_at_name / n_active
@@ -778,10 +793,13 @@ def name_score(actv_counts, io_node, s1_node, test_actv_counts=None, k=30):
 
     # test
     if test_actv_counts is not None:
-        counts_at_name = (test_actv_counts['count', io_node, :, 'io', best_names_idx].sum() + test_actv_counts['count', s1_node, :, 's', best_names_idx].sum()).sum()
-        total_activations = (test_actv_counts['total', io_node, :, 'io', best_names_idx].sum() + test_actv_counts['total', s1_node, :, 's', best_names_idx].sum()).sum()
-        n_active = (test_actv_counts['count', io_node, :, :, :].sum() + test_actv_counts['count', s1_node, :, :, :].sum()) / 2 + 1e-8 # -> (); prevent division by zero
-
+        counts_at_name = test_actv_counts['count', io_node, :, 'io', best_names_idx].sum()
+        total_activations = test_actv_counts['total', io_node, :, 'io', best_names_idx].sum()
+        n_active = test_actv_counts['count', io_node, :, :, :].sum() 
+        if s1_node is not None:
+            counts_at_name += test_actv_counts['count', s1_node, :, 's', best_names_idx].sum()
+            total_activations += test_actv_counts['total', s1_node, :, 's', best_names_idx].sum()
+            n_active += test_actv_counts['count', s1_node, :, :, :].sum() / 2
         recall = counts_at_name / total_activations
         precision = counts_at_name / n_active
         f_score = get_f_score(precision, recall)
@@ -791,7 +809,7 @@ def name_score(actv_counts, io_node, s1_node, test_actv_counts=None, k=30):
     return best_feature
 
 
-def name_x_context_pos_score(actv_counts, io_node, s1_node, position, test_actv_counts=None, k=30):
+def name_x_context_pos_score(actv_counts, io_node, position, s1_node=None, test_actv_counts=None, k=30):
 # shape of actv_counts: (measures, nodes, patterns, roles, names)
     assert len(actv_counts.maps['measures']) == actv_counts.shape[0]
     assert len(actv_counts.maps['ioi_nodes']) == actv_counts.shape[1]
@@ -801,12 +819,20 @@ def name_x_context_pos_score(actv_counts, io_node, s1_node, position, test_actv_
 
     # calculate recall, precision, f_score for each name
     if position == 1:
-        counts_at_name = actv_counts['count', io_node, 'ABB', 'io', :] + actv_counts['count', s1_node, 'BAB', 's', :] # -> (names,)
-        total_activations = actv_counts['total', io_node, 'ABB', 'io', :] + actv_counts['total', s1_node, 'BAB', 's', :]  # -> (names,)
+        counts_at_name = actv_counts['count', io_node, 'ABB', 'io', :]
+        total_activations = actv_counts['total', io_node, 'ABB', 'io', :] 
     elif position == 2:
-        counts_at_name = actv_counts['count', io_node, 'BAB', 'io', :] + actv_counts['count', s1_node, 'ABB', 's', :]
-        total_activations = actv_counts['total', io_node, 'BAB', 'io', :] + actv_counts['total', s1_node, 'ABB', 's', :]
-    n_active = actv_counts['count', io_node, 'ABB', 'io'].sum() + actv_counts['count', s1_node, 'BAB', 's'].sum() + actv_counts['count', io_node, 'BAB', 'io'].sum() + actv_counts['count', s1_node, 'ABB', 's'].sum() + 1e-8
+        counts_at_name = actv_counts['count', io_node, 'BAB', 'io', :] 
+        total_activations = actv_counts['total', io_node, 'BAB', 'io', :]
+    n_active = actv_counts['count', io_node, 'ABB', 'io'].sum() + actv_counts['count', io_node, 'BAB', 'io'].sum() + 1e-8
+    if s1_node is not None:
+        if position == 1:
+            counts_at_name += actv_counts['count', s1_node, 'BAB', 's', :]
+            total_activations += actv_counts['total', s1_node, 'BAB', 's', :]
+        elif position == 2:
+            counts_at_name += actv_counts['count', s1_node, 'ABB', 's', :]
+            total_activations += actv_counts['total', s1_node, 'ABB', 's', :]
+        n_active += actv_counts['count', s1_node, 'BAB', 's'].sum() + actv_counts['count', s1_node, 'ABB', 's'].sum()
 
     recalls = counts_at_name / total_activations
     precisions = counts_at_name / n_active
@@ -829,12 +855,18 @@ def name_x_context_pos_score(actv_counts, io_node, s1_node, position, test_actv_
         selected_names = torch.topk(f_scores, k).indices
 
         if position == 1:
-            counts_at_name = (actv_counts['count', io_node, 'ABB', 'io', selected_names].sum() + actv_counts['count', s1_node, 'BAB', 's', selected_names].sum()).sum()
-            total_activations = (actv_counts['total', io_node, 'ABB', 'io', selected_names].sum() + actv_counts['total', s1_node, 'BAB', 's', selected_names].sum()).sum()
+            counts_at_name = actv_counts['count', io_node, 'ABB', 'io', selected_names].sum()
+            total_activations = actv_counts['total', io_node, 'ABB', 'io', selected_names].sum()
         elif position == 2:
-            counts_at_name = (actv_counts['count', io_node, 'BAB', 'io', selected_names].sum() + actv_counts['count', s1_node, 'ABB', 's', selected_names].sum()).sum()
-            total_activations = (actv_counts['total', io_node, 'BAB', 'io', selected_names].sum() + actv_counts['total', s1_node, 'ABB', 's', selected_names].sum()).sum()
-
+            counts_at_name = actv_counts['count', io_node, 'BAB', 'io', selected_names].sum() 
+            total_activations = actv_counts['total', io_node, 'BAB', 'io', selected_names].sum()
+        if s1_node is not None:
+            if position == 1:
+                counts_at_name += actv_counts['count', s1_node, 'BAB', 's', selected_names].sum()
+                total_activations += actv_counts['total', s1_node, 'BAB', 's', selected_names].sum()
+            elif position == 2:
+                counts_at_name += actv_counts['count', s1_node, 'ABB', 's', selected_names].sum()
+                total_activations += actv_counts['total', s1_node, 'ABB', 's', selected_names].sum()
         recall = counts_at_name / total_activations
         precision = counts_at_name / n_active
         f_score = get_f_score(precision, recall)  # -> (); f-score for the feature "IO is one of selected_names"
@@ -851,13 +883,20 @@ def name_x_context_pos_score(actv_counts, io_node, s1_node, position, test_actv_
     # test
     if test_actv_counts is not None:
         if position == 1:
-            counts_at_name = (test_actv_counts['count', io_node, 'ABB', 'io', best_names_idx].sum() + test_actv_counts['count', s1_node, 'BAB', 's', best_names_idx].sum()).sum()
-            total_activations = (test_actv_counts['total', io_node, 'ABB', 'io', best_names_idx].sum() + test_actv_counts['total', s1_node, 'BAB', 's', best_names_idx].sum()).sum()
+            counts_at_name = test_actv_counts['count', io_node, 'ABB', 'io', best_names_idx].sum() 
+            total_activations = test_actv_counts['total', io_node, 'ABB', 'io', best_names_idx].sum() 
         elif position == 2:
-            counts_at_name = (test_actv_counts['count', io_node, 'BAB', 'io', best_names_idx].sum() + test_actv_counts['count', s1_node, 'ABB', 's', best_names_idx].sum()).sum()
-            total_activations = (test_actv_counts['total', io_node, 'BAB', 'io', best_names_idx].sum() + test_actv_counts['total', s1_node, 'ABB', 's', best_names_idx].sum()).sum()
-        n_active = test_actv_counts['count', io_node, 'ABB', 'io'].sum() + test_actv_counts['count', s1_node, 'BAB', 's'].sum() + test_actv_counts['count', io_node, 'BAB', 'io'].sum() + test_actv_counts['count', s1_node, 'ABB', 's'].sum() + 1e-8
-
+            counts_at_name = test_actv_counts['count', io_node, 'BAB', 'io', best_names_idx].sum() 
+            total_activations = test_actv_counts['total', io_node, 'BAB', 'io', best_names_idx].sum() 
+        n_active = test_actv_counts['count', io_node, 'ABB', 'io'].sum() + test_actv_counts['count', io_node, 'BAB', 'io'].sum() + 1e-8
+        if s1_node is not None:
+            if position == 1:
+                counts_at_name += test_actv_counts['count', s1_node, 'BAB', 's', best_names_idx].sum()
+                total_activations += test_actv_counts['total', s1_node, 'BAB', 's', best_names_idx].sum()
+            elif position == 2:
+                counts_at_name += test_actv_counts['count', s1_node, 'ABB', 's', best_names_idx].sum()
+                total_activations += test_actv_counts['total', s1_node, 'ABB', 's', best_names_idx].sum()
+            n_active += test_actv_counts['count', s1_node, 'BAB', 's'].sum() + test_actv_counts['count', s1_node, 'ABB', 's'].sum()
         recall = counts_at_name / total_activations
         precision = counts_at_name / n_active
         f_score = get_f_score(precision, recall)
@@ -931,7 +970,7 @@ def gender_x_role_score(actv_counts, role, gender, is_male, test_actv_counts=Non
         score['f_score_test'] = f_score.item()
     return score
 
-def context_position_score(actv_counts, io_node, s1_node, position, test_actv_counts=None):
+def context_position_score(actv_counts, io_node, position, s1_node=None, test_actv_counts=None):
     assert len(actv_counts.maps['measures']) == actv_counts.shape[0]
     assert len(actv_counts.maps['ioi_nodes']) == actv_counts.shape[1]
     assert len(actv_counts.maps['patterns']) == actv_counts.shape[2]
@@ -939,13 +978,21 @@ def context_position_score(actv_counts, io_node, s1_node, position, test_actv_co
     assert len(actv_counts.maps['names']) == actv_counts.shape[4]
 
     if position == 1:
-        active_at_pattern = actv_counts['count', io_node, 'ABB', 'io'].sum() + actv_counts['count', s1_node, 'BAB', 's'].sum()
-        total_at_pattern = actv_counts['total', io_node, 'ABB', 'io'].sum() + actv_counts['total', s1_node, 'BAB', 's'].sum()
+        active_at_pattern = actv_counts['count', io_node, 'ABB', 'io'].sum()
+        total_at_pattern = actv_counts['total', io_node, 'ABB', 'io'].sum()
     elif position == 2:
-        active_at_pattern = actv_counts['count', io_node, 'BAB', 'io'].sum() + actv_counts['count', s1_node, 'ABB', 's'].sum()
-        total_at_pattern = actv_counts['total', io_node, 'BAB', 'io'].sum() + actv_counts['total', s1_node, 'ABB', 's'].sum()
-    active = actv_counts['count', io_node, 'ABB', 'io'].sum() + actv_counts['count', s1_node, 'BAB', 's'].sum() + actv_counts['count', io_node, 'BAB', 'io'].sum() + actv_counts['count', s1_node, 'ABB', 's'].sum()
+        active_at_pattern = actv_counts['count', io_node, 'BAB', 'io'].sum()
+        total_at_pattern = actv_counts['total', io_node, 'BAB', 'io'].sum() 
+    active = actv_counts['count', io_node, :, 'io'].sum() 
     active += 1e-8
+    if s1_node is not None:
+        if position == 1:
+            active_at_pattern += actv_counts['count', s1_node, 'BAB', 's'].sum()
+            total_at_pattern += actv_counts['total', s1_node, 'BAB', 's'].sum()
+        elif position == 2:
+            active_at_pattern += actv_counts['count', s1_node, 'ABB', 's'].sum()
+            total_at_pattern += actv_counts['total', s1_node, 'ABB', 's'].sum()
+        active += actv_counts['count', s1_node, :, 's'].sum()
 
     recall = active_at_pattern / total_at_pattern
     precision = active_at_pattern / active
@@ -962,13 +1009,21 @@ def context_position_score(actv_counts, io_node, s1_node, position, test_actv_co
     # test
     if test_actv_counts is not None:
         if position == 1:
-            active_at_pattern = test_actv_counts['count', io_node, 'ABB', 'io'].sum() + test_actv_counts['count', s1_node, 'BAB', 's'].sum()
-            total_at_pattern = test_actv_counts['total', io_node, 'ABB', 'io'].sum() + test_actv_counts['total', s1_node, 'BAB', 's'].sum()
+            active_at_pattern = test_actv_counts['count', io_node, 'ABB', 'io'].sum()
+            total_at_pattern = test_actv_counts['total', io_node, 'ABB', 'io'].sum()
         elif position == 2:
-            active_at_pattern = test_actv_counts['count', io_node, 'BAB', 'io'].sum() + test_actv_counts['count', s1_node, 'ABB', 's'].sum()
-            total_at_pattern = test_actv_counts['total', io_node, 'BAB', 'io'].sum() + test_actv_counts['total', s1_node, 'ABB', 's'].sum()
-        active = test_actv_counts['count', io_node, 'ABB', 'io'].sum() + test_actv_counts['count', s1_node, 'BAB', 's'].sum() + test_actv_counts['count', io_node, 'BAB', 'io'].sum() + test_actv_counts['count', s1_node, 'ABB', 's'].sum()
+            active_at_pattern = test_actv_counts['count', io_node, 'BAB', 'io'].sum()
+            total_at_pattern = test_actv_counts['total', io_node, 'BAB', 'io'].sum() 
+        active = test_actv_counts['count', io_node, :, 'io'].sum() 
         active += 1e-8
+        if s1_node is not None:
+            if position == 1:
+                active_at_pattern += test_actv_counts['count', s1_node, 'BAB', 's'].sum()
+                total_at_pattern += test_actv_counts['total', s1_node, 'BAB', 's'].sum()
+            elif position == 2:
+                active_at_pattern += test_actv_counts['count', s1_node, 'ABB', 's'].sum()
+                total_at_pattern += test_actv_counts['total', s1_node, 'ABB', 's'].sum()
+            active += test_actv_counts['count', s1_node, :, 's'].sum()
 
         recall = active_at_pattern / total_at_pattern
         precision = active_at_pattern / active
