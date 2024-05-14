@@ -187,11 +187,37 @@ class SAETrainer(pl.LightningModule):
         self.log("val_l0_loss", self.l0_loss.compute(), logger=True)
         self.l0_loss.reset()
 
-    def on_test_epoch_end(self) -> None:
-        self.on_validation_epoch_end()
-
     def test_step(self, batch, batch_idx):
-        return self.validation_step(batch, batch_idx)
+        X = batch
+        X_hat, feature_activations = self(X)
+        loss, mse, l1 = self.criterion(X_hat, X, feature_activations)
+        self.log("test_loss", loss, prog_bar=True, logger=True)
+        self.log("test_mse", mse, prog_bar=True, logger=True)
+        self.log("test_l1", l1, prog_bar=True, logger=True)
+        if self.reconstruction_loss_metric_zero:
+            self.reconstruction_loss_metric_zero.update()
+        if self.reconstruction_loss_metric_mean:
+            self.reconstruction_loss_metric_mean.update()
+        self.l0_loss.update(feature_activations)
+        return loss
+
+    def on_test_epoch_end(self) -> None:
+        if self.reconstruction_loss_metric_zero:
+            self.log(
+                "test_reconstruction_loss_zero",
+                self.reconstruction_loss_metric_zero.compute(),
+                logger=True,
+            )
+            self.reconstruction_loss_metric_zero.reset()
+        if self.reconstruction_loss_metric_mean:
+            self.log(
+                "test_reconstruction_loss_mean",
+                self.reconstruction_loss_metric_mean.compute(),
+                logger=True,
+            )
+            self.reconstruction_loss_metric_mean.reset()
+        self.log("test_l0_loss", self.l0_loss.compute(), logger=True)
+        self.l0_loss.reset()
 
     def configure_optimizers(self):
         beta_1 = self.kwargs.get("beta_1", 0.9)

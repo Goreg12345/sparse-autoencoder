@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Union
 
 import torch
 from torch import nn
@@ -109,3 +109,44 @@ class SparseAutoencoder(nn.Module):
             state_dict["standard_norm"] = torch.tensor(1, dtype=torch.float32)
         sae.load_state_dict(state_dict)
         return sae
+
+
+class GatedSparseAutoencoder(SparseAutoencoder):
+    def __init__(self, d_input, d_hidden, cfg=None, *args):
+        super().__init__(d_input, d_hidden, cfg=cfg, *args)
+
+        self.r_mag = nn.Parameter(torch.empty(d_hidden))
+        self.b_gate = nn.Parameter(torch.empty(d_hidden))
+
+    def encoder(self, X: torch.Tensor, training=True) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+        # standardize input
+        X = (X - self.mean) / self.standard_norm
+        # subtract decoder bias
+        if not self.cfg.get("disable_decoder_bias", False):
+            X = X - self.b_dec
+        X = X @ self.W_enc # batch d_input, d_input d_hidden
+        X_mag = X * torch.exp(self.r_mag) + self.b_enc
+        X_mag = F.relu(X_mag)
+
+        pi_gate = X + self.b_gate
+        # binarize
+        X_gate = (pi_gate > 0).float()
+        if training:
+            return X_mag * X_gate, pi_gate
+
+        return X_mag * X_gate
+
+    def forward(self, X: torch.Tensor, training=True) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        if training:
+            feature_activations, pi_gate = self.encoder(X, training)
+            X_recons = self.decoder(feature_activations)
+            return X_recons, feature_activations, pi_gate
+        else:
+            feature_activations = self.encoder(X, training)
+            X = self.decoder(feature_activations)
+            return X, feature_activations
+
+    def reset_parameters(self):
+        super().reset_parameters()
+        nn.init.zeros_(self.r_mag)  # e^r would be 1, so it initially doesn't change the magnitude
+        nn.init.zeros_(self.b_gate)
