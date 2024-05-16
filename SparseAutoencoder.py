@@ -4,14 +4,17 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 
+from activation_buffer import Buffer
+from training.config import SAEConfig
+
 
 class SparseAutoencoder(nn.Module):
-    def __init__(self, d_input, d_hidden, cfg=None, *args):
+    def __init__(self, config: SAEConfig, *args):
         super().__init__(*args)
 
-        self.d_hidden = d_hidden
-
-        self.cfg = cfg
+        d_hidden = config.d_hidden
+        d_input = config.actv_size
+        self.cfg = config
 
         self.W_enc = nn.Parameter(torch.empty(d_input, d_hidden))
         self.b_enc = nn.Parameter(torch.empty(d_hidden))
@@ -24,7 +27,7 @@ class SparseAutoencoder(nn.Module):
         # initialize
         self.reset_parameters()
 
-    def reset_parameters(self):
+    def reset_parameters(self, buffer: Buffer = None):
         # we don't need to initialize the decoder weights with kaiming initialization,
         # because we normalize them to unit norm anyways
         nn.init.uniform_(self.W_dec, -1, 1)
@@ -39,6 +42,13 @@ class SparseAutoencoder(nn.Module):
         nn.init.zeros_(self.mean)
         nn.init.ones_(self.standard_norm)
 
+        if buffer is not None:
+            acts = buffer.buffer[:10000000]
+            if self.cfg.init_geometric_median:
+                self.init_geometric_median(acts)
+            if self.cfg.standardize_activations:
+                self.init_activation_standardization(acts)
+
     def init_geometric_median(self, acts):
         # standardize input
         # X = (acts - self.mean) / self.standard_norm
@@ -50,7 +60,7 @@ class SparseAutoencoder(nn.Module):
     def init_activation_standardization(self, acts):
         acts = acts - self.mean
         self.standard_norm.data = acts.norm(dim=1).mean()
-        if self.cfg.get("adjust_for_dict_size", False):
+        if self.cfg.adjust_for_dict_size:
             self.standard_norm.data = self.standard_norm.data * torch.sqrt(
                 torch.tensor(self.d_hidden, dtype=torch.float32)
             )
@@ -59,7 +69,7 @@ class SparseAutoencoder(nn.Module):
         # standardize input
         X = (X - self.mean) / self.standard_norm
         # subtract decoder bias
-        if not self.cfg.get("disable_decoder_bias", False):
+        if not self.cfg.disable_decoder_bias:
             X = X - self.b_dec
         X = X @ self.W_enc + self.b_enc  # batch d_input, d_input d_hidden
         return F.relu(X)
@@ -85,7 +95,7 @@ class SparseAutoencoder(nn.Module):
 
     def make_decoder_weights_unit_norm(self):
         norm = self.W_dec.data.norm(dim=-1, keepdim=True)
-        if self.cfg["allow_lower_decoder_norm"]:
+        if self.cfg.allow_lower_decoder_norm:
             norm_greater_than_one = (norm > 1).view(-1)
             self.W_dec.data[norm_greater_than_one] = (
                 self.W_dec.data[norm_greater_than_one] / norm[norm_greater_than_one]
@@ -94,8 +104,8 @@ class SparseAutoencoder(nn.Module):
             self.W_dec.data = self.W_dec.data / norm
 
     @classmethod
-    def load(self, path, cfg):
-        sae = SparseAutoencoder(cfg["actv_size"], cfg["d_hidden"], cfg=cfg)
+    def load(self, path, cfg: SAEConfig):
+        sae = SparseAutoencoder(config=cfg)
         checkpoint = torch.load(path)
         if "state_dict" in checkpoint:
             state_dict = checkpoint["state_dict"]
@@ -104,17 +114,31 @@ class SparseAutoencoder(nn.Module):
         # remove sae. prefix
         state_dict = {k.replace("sae.", ""): v for k, v in state_dict.items()}
         if "mean" not in state_dict:
-            state_dict["mean"] = torch.zeros(cfg["actv_size"])
+            state_dict["mean"] = torch.zeros(cfg.actv_size)
         if "standard_norm" not in state_dict:
             state_dict["standard_norm"] = torch.tensor(1, dtype=torch.float32)
         sae.load_state_dict(state_dict)
         return sae
 
+    def create_trainer(self, loader: torch.utils.data.DataLoader = None):
+        from SAETrainer import SAETrainer
+        if self.cfg.resampling_steps:
+            if loader is None:
+                raise ValueError("loader must be provided for resampling")
+            from training.DeadFeatureResampler import DeadFeatureResampler
+            resampler = DeadFeatureResampler(
+                loader, self.cfg.n_resampler_samples, self.cfg.actv_size, self.cfg.d_hidden
+            )
+            return SAETrainer(self.cfg, self, dead_features_resampler=resampler)
+        return SAETrainer(self.cfg, self)
+
+
 
 class GatedSparseAutoencoder(SparseAutoencoder):
-    def __init__(self, d_input, d_hidden, cfg=None, *args):
-        super().__init__(d_input, d_hidden, cfg=cfg, *args)
+    def __init__(self, config: SAEConfig, *args):
+        super().__init__(config, *args)
 
+        d_hidden = config.d_hidden
         self.r_mag = nn.Parameter(torch.empty(d_hidden))
         self.b_gate = nn.Parameter(torch.empty(d_hidden))
 

@@ -2,6 +2,7 @@ import torch
 from torch.utils.data import IterableDataset
 from torchmetrics import Metric
 from transformer_lens import HookedTransformer
+import pytorch_lightning as pl
 
 from SparseAutoencoder import SparseAutoencoder
 
@@ -147,3 +148,26 @@ class ReconstructionLoss(Metric):
 
     def state_dict(self, destination=None, prefix="", keep_vars=False):
         return {}
+
+
+class ReconstructionLossCallback(pl.Callback):
+    def __init__(self, llm, sae, text_dataset, sae_component, head=None, ablation_type="zero", seq_position="all", **kwargs):
+        super().__init__()
+        self.metric = ReconstructionLoss(llm, sae, text_dataset, sae_component, head, ablation_type, seq_position, **kwargs)
+        self.ablation_type = ablation_type
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        # Ensure the metric is on the correct device
+        self.metric.to(pl_module.device)
+
+        # Update the metric
+        self.metric.update()
+
+    def on_validation_epoch_end(self, trainer, pl_module):
+        # Ensure the metric is on the correct device
+        self.metric.to(pl_module.device)
+
+        # Log the computed metric with ablation type in the log name
+        log_name = f'val_reconstruction_loss_{self.ablation_type}'
+        trainer.logger.experiment.log({log_name: self.metric.compute().item()})
+        self.metric.reset()

@@ -1,8 +1,8 @@
 import torch
 from torchmetrics import Metric
 import wandb
-import numpy as np
 import pandas as pd
+import pytorch_lightning as pl
 
 
 class UltraLowDensityNeurons(Metric):
@@ -48,3 +48,31 @@ class UltraLowDensityNeurons(Metric):
         if self.return_neuron_indices:
             return (freqs < self.threshold).nonzero(as_tuple=True)[0]
         return (freqs < self.threshold).sum() / self.n_features
+
+
+class UltraLowDensityNeuronsCallback(pl.Callback):
+    def __init__(self, n_features, return_neuron_indices=False, threshold=1e-6, log_interval=2000,
+                 start_batch_idx=1000):
+        super().__init__()
+        self.metric = UltraLowDensityNeurons(n_features, return_neuron_indices, threshold)
+        self.hist_metric = UltraLowDensityNeurons(n_features, return_neuron_indices, threshold)
+        self.log_interval = log_interval
+        self.start_batch_idx = start_batch_idx
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        self.metric.to(pl_module.device)
+        self.hist_metric.to(pl_module.device)
+
+        if batch_idx > self.start_batch_idx:
+            feature_activations = outputs['feature_activations']
+            self.metric.update(feature_activations)
+            self.hist_metric.update(feature_activations)
+
+            # Log the metrics at specified intervals
+            if batch_idx % self.log_interval == 0:
+                trainer.logger.experiment.log({"low_freq_neurons": self.metric.compute().item()})
+                self.metric.reset()
+
+                histogram = self.hist_metric.compute(return_wandb_bar=True)
+                trainer.logger.experiment.log({"frequency_hist": histogram})
+                self.hist_metric.reset()

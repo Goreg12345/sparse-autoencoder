@@ -10,7 +10,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.callbacks import ModelCheckpoint
 from transformer_lens import HookedTransformer
 
-from DeadFeatureResampler import DeadFeatureResampler
+from training.DeadFeatureResampler import DeadFeatureResampler
 from SparseAutoencoder import SparseAutoencoder
 from SAETrainer import SAETrainer
 from metrics.reconstruction_loss import ReconstructionLoss

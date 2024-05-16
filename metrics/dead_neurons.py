@@ -1,4 +1,5 @@
 import torch
+import pytorch_lightning as pl
 from torchmetrics import Metric
 
 
@@ -30,3 +31,20 @@ class DeadNeurons(Metric):
         if self.return_neuron_indices:
             return (self.dead_neurons == 0.0).nonzero(as_tuple=True)[0]
         return (self.dead_neurons == 0.0).sum() / self.n_features
+
+
+class DeadNeuronsCallback(pl.Callback):
+    def __init__(self, n_features, return_neuron_indices=False, log_interval=2000):
+        super().__init__()
+        self.metric = DeadNeurons(n_features, return_neuron_indices)
+        self.log_interval = log_interval
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        # Extract the feature activations from the training_step output
+        self.metric.to(pl_module.device)
+        feature_activations = outputs['feature_activations']
+        self.metric.update(feature_activations)
+
+        if batch_idx % self.log_interval == 0:
+            trainer.logger.experiment.log({'dead_neurons': self.metric.compute().item()})
+            self.metric.reset()

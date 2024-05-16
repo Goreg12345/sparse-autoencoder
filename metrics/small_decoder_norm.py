@@ -3,6 +3,7 @@ from torchmetrics import Metric
 import wandb
 import numpy as np
 import pandas as pd
+import pytorch_lightning as pl
 
 
 class SmallDecoderNorm(Metric):
@@ -47,3 +48,26 @@ class SmallDecoderNorm(Metric):
         if self.return_neuron_indices:
             return (norms < self.threshold).nonzero(as_tuple=True)[0]
         return (norms < self.threshold).sum() / self.n_features
+
+
+class SmallDecoderNormCallback(pl.Callback):
+    def __init__(self, n_features, return_neuron_indices=False, threshold=0.99, log_interval=5000):
+        super().__init__()
+        self.metric = SmallDecoderNorm(n_features, return_neuron_indices, threshold)
+        self.hist_metric = SmallDecoderNorm(n_features, return_neuron_indices, threshold)
+        self.log_interval = log_interval
+
+    def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        self.metric.to(pl_module.device)
+        self.hist_metric.to(pl_module.device)
+
+        self.metric.update(pl_module.sae.W_dec)
+
+        # Log the histogram at specified intervals
+        if batch_idx % self.log_interval == 0:
+            self.hist_metric.update(pl_module.sae.W_dec)
+            histogram = self.hist_metric.compute(return_wandb_bar=True)
+            trainer.logger.experiment.log({"decoder_norm_hist": histogram})
+            self.hist_metric.reset()
+            trainer.logger.experiment.log({"small_decoder_norm": self.metric.compute().item()})
+            self.metric.reset()
