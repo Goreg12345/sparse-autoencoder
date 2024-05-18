@@ -2,6 +2,7 @@ from typing import Any, Union, Optional, Callable, IO
 
 import pytorch_lightning as pl
 import torch
+import torch.nn.functional as F
 from lightning_fabric.utilities.types import _PATH, _MAP_LOCATION_TYPE
 from pytorch_lightning.core.optimizer import LightningOptimizer
 from torch import nn, Tensor
@@ -194,13 +195,73 @@ class SAETrainer(pl.LightningModule):
 
 
 class GatedSAETrainer(SAETrainer):
-    ...
+    def __init__(self, config: SAEConfig, sae: GatedSparseAutoencoder, *args, **kwargs):
+        super().__init__(config, sae, *args, **kwargs)
 
-    def init_sae(self):
-        self.sae = GatedSparseAutoencoder(self.config)
-        if self.config.init_geometric_median:
-            self.sae.init_geometric_median(torch.tensor(self.buffer.buffer[:10000000]))
-        if self.config.standardize_activations:
-            self.sae.init_activation_standardization(
-                torch.tensor(self.buffer.buffer[:10000000])
-            )
+    def criterion(self, X_hat, X, feature_activations, pi_gate):
+        # standardize X and X_hat such that they are in the feature norm
+        X = (X - self.sae.mean) / self.sae.standard_norm
+        X_hat = (X_hat - self.sae.mean) / self.sae.standard_norm
+        mse = (X_hat - X).pow(2).sum(dim=1).mean()
+        l1 = (
+            self.config.l1_coefficient
+            * F.relu(pi_gate).sum(dim=1).mean()
+        )
+        with torch.no_grad():
+            X_frozen = F.relu(pi_gate) @ self.sae.W_dec + self.sae.b_dec
+            aux = (X_frozen - X).pow(2).sum(dim=1).mean()
+        return mse + l1 + aux, mse, l1, aux
+
+    def training_step(self, batch, batch_idx):
+        X = batch
+        if batch_idx == 0:
+            if self.config.init_geometric_median:
+                self.sae.init_geometric_median(X)
+
+        X_hat, feature_activations, pi_gate = self.sae.forward(X, training=True)
+        loss, mse, l1, aux = self.criterion(X_hat, X, feature_activations, pi_gate)
+
+        self.log("train_loss", loss, prog_bar=True, logger=True)
+        self.log("train_mse", mse, prog_bar=True, logger=True)
+        self.log("train_l1", l1, prog_bar=True, logger=True)
+        self.log("train_aux", aux, prog_bar=True, logger=True)
+
+        if self.dead_features_resampler:
+            # if batch_idx between any of resampling steps - 1000 and resampling steps
+            if any(
+                    [
+                        batch_idx in range(step - self.n_resampling_watch_steps, step)
+                        for step in self.resampling_steps
+                    ]
+            ):
+                self.dead_features_resampler.update(feature_activations)
+            if batch_idx in self.resampling_steps:
+                # this resamples and sets new weights of self.sae
+                self.dead_features_resampler.compute(
+                    self.sae, self.trainer.optimizers[0]
+                )
+                self.dead_features_resampler.reset()
+
+        if self.l1_scheduler:
+            self.config.l1_coefficient = self.l1_scheduler(batch_idx, self.config.l1_coefficient)
+
+        # return multiple values such that metrics can use them through callbacks
+        return {
+            'loss': loss.float(),
+            'feature_activations': feature_activations,
+            'reconstructions': X_hat,
+        }
+
+    def validation_step(self, batch, batch_idx):
+        X = batch
+        X_hat, feature_activations, pi_gate = self.sae.forward(X, training=True)
+        loss, mse, l1, aux = self.criterion(X_hat, X, feature_activations, pi_gate)
+        self.log("val_loss", loss, prog_bar=True, logger=True)
+        self.log("val_mse", mse, prog_bar=True, logger=True)
+        self.log("val_l1", l1, prog_bar=True, logger=True)
+        self.log("val_aux", aux, prog_bar=True, logger=True)
+        return {
+            'loss': loss.float(),
+            'feature_activations': feature_activations,
+            'reconstructions': X_hat,
+        }

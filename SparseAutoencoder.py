@@ -8,6 +8,17 @@ from activation_buffer import Buffer
 from training.config import SAEConfig
 
 
+def sae_from_config(config: SAEConfig) -> "SparseAutoencoder":
+    if config.sae_type == "vanilla":
+        sae = SparseAutoencoder(config)
+    elif config.sae_type == "gated":
+        sae = GatedSparseAutoencoder(config)
+    else:
+        raise ValueError(f"Unknown SAE type: {config.sae_type}")
+    sae.reset_parameters()
+    return sae
+
+
 class SparseAutoencoder(nn.Module):
     def __init__(self, config: SAEConfig, *args):
         super().__init__(*args)
@@ -24,8 +35,6 @@ class SparseAutoencoder(nn.Module):
         self.standard_norm = nn.Parameter(
             torch.tensor(1, dtype=torch.float32), requires_grad=False
         )
-        # initialize
-        self.reset_parameters()
 
     def reset_parameters(self, buffer: Buffer = None):
         # we don't need to initialize the decoder weights with kaiming initialization,
@@ -133,7 +142,6 @@ class SparseAutoencoder(nn.Module):
         return SAETrainer(self.cfg, self)
 
 
-
 class GatedSparseAutoencoder(SparseAutoencoder):
     def __init__(self, config: SAEConfig, *args):
         super().__init__(config, *args)
@@ -142,11 +150,11 @@ class GatedSparseAutoencoder(SparseAutoencoder):
         self.r_mag = nn.Parameter(torch.empty(d_hidden))
         self.b_gate = nn.Parameter(torch.empty(d_hidden))
 
-    def encoder(self, X: torch.Tensor, training=True) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
+    def encoder(self, X: torch.Tensor, training=False) -> Union[torch.Tensor, Tuple[torch.Tensor, torch.Tensor]]:
         # standardize input
         X = (X - self.mean) / self.standard_norm
         # subtract decoder bias
-        if not self.cfg.get("disable_decoder_bias", False):
+        if not self.cfg.disable_decoder_bias:
             X = X - self.b_dec
         X = X @ self.W_enc # batch d_input, d_input d_hidden
         X_mag = X * torch.exp(self.r_mag) + self.b_enc
@@ -160,7 +168,7 @@ class GatedSparseAutoencoder(SparseAutoencoder):
 
         return X_mag * X_gate
 
-    def forward(self, X: torch.Tensor, training=True) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+    def forward(self, X: torch.Tensor, training=False) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
         if training:
             feature_activations, pi_gate = self.encoder(X, training)
             X_recons = self.decoder(feature_activations)
@@ -170,7 +178,19 @@ class GatedSparseAutoencoder(SparseAutoencoder):
             X = self.decoder(feature_activations)
             return X, feature_activations
 
-    def reset_parameters(self):
-        super().reset_parameters()
+    def reset_parameters(self, buffer: Buffer = None):
+        super().reset_parameters(buffer)
         nn.init.zeros_(self.r_mag)  # e^r would be 1, so it initially doesn't change the magnitude
         nn.init.zeros_(self.b_gate)
+
+    def create_trainer(self, loader: torch.utils.data.DataLoader = None):
+        from SAETrainer import GatedSAETrainer
+        if self.cfg.resampling_steps:
+            if loader is None:
+                raise ValueError("loader must be provided for resampling")
+            from training.DeadFeatureResampler import DeadFeatureResampler
+            resampler = DeadFeatureResampler(
+                loader, self.cfg.n_resampler_samples, self.cfg.actv_size, self.cfg.d_hidden
+            )
+            return GatedSAETrainer(self.cfg, self, dead_features_resampler=resampler)
+        return GatedSAETrainer(self.cfg, self)

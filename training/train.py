@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from transformer_lens import HookedTransformer
 
 import text_dataset
-from SparseAutoencoder import SparseAutoencoder
+from SparseAutoencoder import SparseAutoencoder, sae_from_config
 from activation_buffer import Buffer, DiscBuffer
 from metrics.L0Loss import L0LossCallback
 from metrics.dead_neurons import DeadNeuronsCallback
@@ -75,7 +75,7 @@ def train(config: SAEConfig):
         )
 
     # AUTOENCODER
-    sae = SparseAutoencoder(config)
+    sae = sae_from_config(config)
 
     reconstruction_loss_metric_zero = ReconstructionLossCallback(
         llm,
