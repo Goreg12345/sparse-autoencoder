@@ -1,7 +1,6 @@
 import collections
 import os
 
-os.environ['CUDA_VISIBLE_DEVICES'] = '2'
 import re
 from abc import ABC
 from collections import OrderedDict

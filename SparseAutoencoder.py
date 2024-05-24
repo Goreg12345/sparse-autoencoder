@@ -8,14 +8,16 @@ from activation_buffer import Buffer
 from training.config import SAEConfig
 
 
-def sae_from_config(config: SAEConfig) -> "SparseAutoencoder":
+def sae_from_config(config: SAEConfig, buffer: Buffer = None) -> "SparseAutoencoder":
     if config.sae_type == "vanilla":
         sae = SparseAutoencoder(config)
     elif config.sae_type == "gated":
         sae = GatedSparseAutoencoder(config)
+    elif config.sae_type == "anthropic":
+        sae = AnthropicSAE(config)
     else:
         raise ValueError(f"Unknown SAE type: {config.sae_type}")
-    sae.reset_parameters()
+    sae.reset_parameters(buffer)
     return sae
 
 
@@ -194,3 +196,48 @@ class GatedSparseAutoencoder(SparseAutoencoder):
             )
             return GatedSAETrainer(self.cfg, self, dead_features_resampler=resampler)
         return GatedSAETrainer(self.cfg, self)
+
+
+class AnthropicSAE(SparseAutoencoder):
+    def __init__(self, config: SAEConfig, *args):
+        super().__init__(config, *args)
+
+    def encoder(self, X: torch.Tensor) -> torch.Tensor:
+        # standardize input
+        X = (X - self.mean) / self.standard_norm
+        X = X @ self.W_enc + self.b_enc
+        return F.relu(X)
+
+    def reset_parameters(self, buffer: Buffer = None):
+        super().reset_parameters(buffer)
+        # make W_dec columns have norm 0.1
+        self.W_dec.data *= 0.1
+        # init W_enc as W_dec^T as per anthropic blog post
+        self.W_enc.data = self.W_dec.data.T
+
+    def clip_gradient_norm(self):
+        nn.utils.clip_grad_norm_(self.parameters(), 1.0)
+
+    def create_trainer(self, loader: torch.utils.data.DataLoader = None):
+        from SAETrainer import AnthropicSAETrainer
+        if self.cfg.resampling_steps:
+            if loader is None:
+                raise ValueError("loader must be provided for resampling")
+            from training.DeadFeatureResampler import DeadFeatureResampler
+            resampler = DeadFeatureResampler(
+                loader, self.cfg.n_resampler_samples, self.cfg.actv_size, self.cfg.d_hidden
+            )
+            return AnthropicSAETrainer(self.cfg, self, dead_features_resampler=resampler)
+        return AnthropicSAETrainer(self.cfg, self)
+
+    def init_activation_standardization(self, acts):
+        acts = torch.tensor(acts, dtype=torch.float32, device=self.W_enc.device)
+        acts = acts - self.mean
+        n = self.cfg.actv_size
+        sqrt_n = torch.sqrt(torch.tensor(n, dtype=torch.float32, device=acts.device))
+        # goal: E[||X||] = sqrt(n)
+        self.standard_norm.data = acts.norm(dim=1).mean() / sqrt_n
+        if self.cfg.adjust_for_dict_size:
+            self.standard_norm.data = self.standard_norm.data * torch.sqrt(
+                torch.tensor(self.d_hidden, dtype=torch.float32)
+            )

@@ -163,6 +163,13 @@ class ReconstructionLossCallback(pl.Callback):
         # Update the metric
         self.metric.update()
 
+    def on_test_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        # Ensure the metric is on the correct device
+        self.metric.to(pl_module.device)
+
+        # Update the metric
+        self.metric.update()
+
     def on_validation_epoch_end(self, trainer, pl_module):
         # Ensure the metric is on the correct device
         self.metric.to(pl_module.device)
@@ -171,3 +178,6 @@ class ReconstructionLossCallback(pl.Callback):
         log_name = f'val_reconstruction_loss_{self.ablation_type}'
         trainer.logger.experiment.log({log_name: self.metric.compute().item()})
         self.metric.reset()
+
+    def compute(self):
+        return self.metric.compute()

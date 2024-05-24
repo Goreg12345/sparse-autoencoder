@@ -125,7 +125,7 @@ if __name__ == "__main__":
         for batch in tqdm(loader, total=int(cfg["store_size"] / cfg["batch_size"])):
             if h5_pointer + cfg["batch_size"] > cfg["store_size"]:
                 dset[h5_pointer:] = (
-                    batch[: cfg["store_size"] - h5_pointer].cpu().numpy()
+                    batch[: int(cfg["store_size"] - h5_pointer)].cpu().numpy()
                 )
                 break
             else:

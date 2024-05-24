@@ -75,7 +75,7 @@ def train(config: SAEConfig):
         )
 
     # AUTOENCODER
-    sae = sae_from_config(config)
+    sae = sae_from_config(config, buffer)
 
     reconstruction_loss_metric_zero = ReconstructionLossCallback(
         llm,
@@ -138,5 +138,9 @@ def train(config: SAEConfig):
     )
     trainer.fit(model, loader, loader)
 
+
+    trainer.test(model, [loader])
+    res = reconstruction_loss_metric_mean.compute().item()
     if hasattr(buffer, "close"):
         buffer.close()
+    return res

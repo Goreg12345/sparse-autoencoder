@@ -40,6 +40,7 @@ class SAEConfig:
     wandb_name: str = ""
     ckpt_name: str = ""
     sae_type: Literal["vanilla", "gated"] = "vanilla"
+    target_metric: str = None
 
     def to_dict(self):
         return asdict(self)

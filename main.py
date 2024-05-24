@@ -16,7 +16,8 @@ def main(**kwargs):
     config = SAEConfig(**kwargs)
     config.wandb_name = f"{config.actv_name.split('_')[-1]}-{config.wandb_name}-l{config.layer}h{config.head}-l1_{config.l1_coefficient}-{(config.train_steps * config.batch_size / 1e6):.0f}M"
     config.ckpt_name = f"{config.actv_name.split('_')[-1]}-l{config.layer}h{config.head}-l1_{config.l1_coefficient}-{(config.train_steps * config.batch_size / 1e6):.0f}M.ckpt"
-    train(config)
+    res = train(config)
+    print(res)
 
 
 if __name__ == "__main__":

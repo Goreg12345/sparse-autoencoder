@@ -9,7 +9,7 @@ from torch import nn, Tensor
 from torch.optim import Optimizer
 from typing_extensions import Self
 
-from SparseAutoencoder import SparseAutoencoder, GatedSparseAutoencoder
+from SparseAutoencoder import SparseAutoencoder, GatedSparseAutoencoder, AnthropicSAE
 from training.DeadFeatureResampler import DeadFeatureResampler
 from training.config import SAEConfig
 
@@ -199,17 +199,18 @@ class GatedSAETrainer(SAETrainer):
         super().__init__(config, sae, *args, **kwargs)
 
     def criterion(self, X_hat, X, feature_activations, pi_gate):
-        # standardize X and X_hat such that they are in the feature norm
+        # Standardize X and X_hat such that they are in the feature norm
         X = (X - self.sae.mean) / self.sae.standard_norm
         X_hat = (X_hat - self.sae.mean) / self.sae.standard_norm
         mse = (X_hat - X).pow(2).sum(dim=1).mean()
         l1 = (
-            self.config.l1_coefficient
-            * F.relu(pi_gate).sum(dim=1).mean()
+                self.config.l1_coefficient
+                * F.relu(pi_gate).sum(dim=1).mean()
         )
-        with torch.no_grad():
-            X_frozen = F.relu(pi_gate) @ self.sae.W_dec + self.sae.b_dec
-            aux = (X_frozen - X).pow(2).sum(dim=1).mean()
+        W_dec_detached = self.sae.W_dec.detach()
+        b_dec_detached = self.sae.b_dec.detach()
+        X_frozen = F.relu(pi_gate) @ W_dec_detached + b_dec_detached
+        aux = (X_frozen - X).pow(2).sum(dim=1).mean()
         return mse + l1 + aux, mse, l1, aux
 
     def training_step(self, batch, batch_idx):
@@ -265,3 +266,77 @@ class GatedSAETrainer(SAETrainer):
             'feature_activations': feature_activations,
             'reconstructions': X_hat,
         }
+
+    def test_step(self, batch, batch_idx):
+        X = batch
+        X_hat, feature_activations, pi_gate = self.sae.forward(X, training=True)
+        loss, mse, l1, aux = self.criterion(X_hat, X, feature_activations, pi_gate)
+        self.log("test_loss", loss, prog_bar=True, logger=True)
+        self.log("test_mse", mse, prog_bar=True, logger=True)
+        self.log("test_l1", l1, prog_bar=True, logger=True)
+        self.log("test_aux", aux, prog_bar=True, logger=True)
+        return {
+            'loss': loss.float(),
+            'feature_activations': feature_activations,
+            'reconstructions': X_hat,
+        }
+
+
+class L1LinearGrowthScheduler:
+    def __init__(self, base_value, final_step=1000, start_multiplier=0.):
+        self.base_value = base_value.clone()
+        self.final_step = final_step
+        self.start_multiplier = start_multiplier
+
+    def __call__(self, batch_idx, l1_coefficient):
+        if batch_idx >= self.final_step:
+            return self.base_value
+        start_value = self.base_value * self.start_multiplier
+        # Linear interpolation from start_value to base_value
+        return start_value + (self.base_value - start_value) * (batch_idx / self.final_step)
+
+
+class AnthropicSAETrainer(SAETrainer):
+    def __init__(self, config: SAEConfig, sae: AnthropicSAE, *args, **kwargs):
+        super().__init__(config, sae, *args, **kwargs)
+
+        self.l1_scheduler = L1LinearGrowthScheduler(torch.tensor(self.config.l1_coefficient),
+                                                   final_step=int(0.05 * config.train_steps),
+                                                   start_multiplier=0.0)
+
+        # make sure that the config is as published by Anthropic update
+        if True:
+            assert config.beta1 == 0.9
+            assert config.beta2 == 0.999
+            assert config.lr == 5e-5
+            assert config.start_lr_decay > 0
+            assert config.end_lr_decay > 0
+            assert config.batch_size >= 2048
+            assert config.batch_size <= 4096
+            assert config.init_geometric_median == False
+
+    def criterion(self, X_hat, X, feature_activations):
+        # Standardize X and X_hat such that they are in the feature norm
+        X = (X - self.sae.mean) / self.sae.standard_norm
+        X_hat = (X_hat - self.sae.mean) / self.sae.standard_norm
+        mse = (X_hat - X).pow(2).sum(dim=1).mean()
+        l2_norm_dec = self.sae.W_dec.norm(p=2, dim=1)  # (d_hidden,)
+
+        # (batch_size, d_hidden) @ (d_hidden,) -> (batch_size,)
+        l1 = self.config.l1_coefficient * (feature_activations @ l2_norm_dec).mean()
+        return mse + l1, mse, l1
+
+    def backward(self, loss: Tensor, *args: Any, **kwargs: Any) -> None:
+        loss.backward(*args, **kwargs)
+        self.sae.clip_gradient_norm()
+#        self.sae.make_grad_unit_norm()
+
+    def optimizer_step(
+        self,
+        epoch: int,
+        batch_idx: int,
+        optimizer: Union[Optimizer, LightningOptimizer],
+        optimizer_closure: Optional[Callable[[], Any]] = None,
+    ) -> None:
+        pl.LightningModule.optimizer_step(self, epoch, batch_idx, optimizer, optimizer_closure)
+#        self.sae.make_decoder_weights_unit_norm()
