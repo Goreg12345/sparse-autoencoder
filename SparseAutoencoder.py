@@ -69,6 +69,7 @@ class SparseAutoencoder(nn.Module):
         ]  # median returns a tuple of (values, indices)
 
     def init_activation_standardization(self, acts):
+        acts = torch.tensor(acts, dtype=torch.float32, device=self.W_enc.device)
         acts = acts - self.mean
         self.standard_norm.data = acts.norm(dim=1).mean()
         if self.cfg.adjust_for_dict_size:

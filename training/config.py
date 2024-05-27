@@ -33,13 +33,13 @@ class SAEConfig:
     resampling_steps: list = field(default_factory=list)
     n_resampling_watch_steps: int = 5000
     lr_warmup_steps: int = 6000
-    head: int = 9
+    head: int = None
     l1_exponent: int = 1
     reconstruction_loss_batch_size: int = 16
     n_resampler_samples: int = 819200
     wandb_name: str = ""
     ckpt_name: str = ""
-    sae_type: Literal["vanilla", "gated"] = "vanilla"
+    sae_type: Literal["vanilla", "gated", "anthropic"] = "vanilla"
     target_metric: str = None
 
     def to_dict(self):
